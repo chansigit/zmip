@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zmip"
+version = "0.1.0"
+description = "Zoom-in pipeline: per-lineage re-embedding, foreign-lineage scoring and agent refinement of an msp annotation"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "chansigit", email = "chansigit@gmail.com" }]
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "msp>=0.2.0",
+    "claude-agent-sdk",
+    "scanpy",
+    "anndata",
+    "pandas",
+    "numpy",
+    "scipy",
+    "matplotlib",
+]
+
+[project.urls]
+Homepage = "https://github.com/chansigit/zmip"
+
+[tool.setuptools]
+packages = ["zmip"]
