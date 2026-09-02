@@ -15,8 +15,8 @@ msp annotated.h5ad ──▶ plan ──▶ per lineage: re-embed → foreign sc
 ## Install
 
 ```bash
-pip install git+https://github.com/chansigit/msp.git
-pip install git+https://github.com/chansigit/zmip.git   # needs claude-agent-sdk + Claude Code CLI credentials
+pip install msp-sc                                        # msp on PyPI (import name `msp`)
+pip install zmip                                          # needs claude-agent-sdk + Claude Code CLI credentials
 ```
 
 ## Usage

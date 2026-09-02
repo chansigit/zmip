@@ -16,7 +16,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
-    "msp>=0.2.0",
+    "msp-sc>=0.2.0",   # PyPI name of msp (import name `msp`)
     "claude-agent-sdk",
     "scanpy",
     "anndata",
