@@ -31,6 +31,7 @@ import scanpy as sc
 import scipy.sparse as sp
 
 from msp.plots import save_single_umap, slug
+from msp.agent_util import run_query
 
 DEFAULT_MIN_CELLS = 800
 
@@ -171,7 +172,7 @@ If validation fails, fix the named problems and call it again."""
 
 async def _run(ad, coarse_col, labels, counts, knn, paga, outdir, min_cells, species, model, effort):
     from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ResultMessage, ToolUseBlock,
-                                  create_sdk_mcp_server, query, tool)
+                                  create_sdk_mcp_server, tool)
 
     holder = {}
 
@@ -205,8 +206,8 @@ async def _run(ad, coarse_col, labels, counts, knn, paga, outdir, min_cells, spe
         **({"effort": effort} if effort else {}),
     )
     result_text = None
-    async for message in query(prompt=f"Read {fig_rel}, then plan the lineages and call submit_plan.",
-                               options=options):
+    async for message in run_query(f"Read {fig_rel}, then plan the lineages and call submit_plan.",
+                                   options, label="zmip plan"):
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, ToolUseBlock):

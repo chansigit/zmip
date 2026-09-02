@@ -45,6 +45,7 @@ from msp.inspect import (
     _stability_table, _subcluster_once,
 )
 from msp.report import generate_report
+from msp.agent_util import run_query
 
 REMOVE_BUDGET = 0.10  # agent-removed share of a lineage above which finalize asks for a second look
 
@@ -313,7 +314,7 @@ markers and low doublet evidence; mixed profiles are doublets, not reassignments
 async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_col, species, prior_cols,
                      paga, pre_removed, foreign_cols, other_keys, language, model, effort, max_turns):
     from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ResultMessage, ToolUseBlock,
-                                  create_sdk_mcp_server, query, tool)
+                                  create_sdk_mcp_server, tool)
 
     state = {"key": BASE_KEY, "n_sub": 0}
     entries, holder = {}, {}
@@ -466,8 +467,8 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
         **({"effort": effort} if effort else {}),
     )
     result_text = None
-    async for message in query(prompt=f"Zoom-in annotate lineage {lineage!r}: one Task per base cluster, "
-                                      "submit_cluster each, then finalize_annotation.", options=options):
+    async for message in run_query(f"Zoom-in annotate lineage {lineage!r}: one Task per base cluster, "
+                                   "submit_cluster each, then finalize_annotation.", options, label=f"zmip {lineage}"):
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, ToolUseBlock):
