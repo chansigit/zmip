@@ -512,7 +512,9 @@ def annotate_lineage(ad, outdir, lineage, lineage_labels, other_labels, foreign_
     tmp = os.path.join(outdir, "annotated.tmp.h5ad")
     kept.write_h5ad(tmp)
     os.replace(tmp, os.path.join(outdir, "annotated.h5ad"))
-    generate_report(outdir, title=f"zmip lineage report — {lineage} ({', '.join(lineage_labels)})")
+    from msp.report import compose_title
+
+    generate_report(outdir, title=compose_title("zoom-in lineage (zmip)", outdir, subject=lineage))
     print(f"== [{lineage}] removed {len(removed)}, reassigned {len(reassigned)}, kept {kept.n_obs}/{ad.n_obs}",
           flush=True)
     return proposal, removed, reassigned

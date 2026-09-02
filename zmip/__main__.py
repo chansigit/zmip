@@ -32,6 +32,7 @@ from .foreign import lineage_markers, score_foreign
 from .merge import merge_back
 from .plan import DEFAULT_MIN_CELLS, plan_lineages
 from .report import generate_report
+from msp.report import write_report_context
 
 parser = argparse.ArgumentParser(prog="zmip", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -53,6 +54,8 @@ parser.add_argument("--language", default="English")
 parser.add_argument("--model", default=None)
 parser.add_argument("--effort", default=None, choices=["low", "medium", "high", "xhigh", "max"])
 parser.add_argument("--max-turns", type=int, default=200)
+parser.add_argument("--report-context", default=None, metavar="TEXT",
+                    help='where this run sits, for report titles (e.g. "round 2 · fu2022-meniscus")')
 parser.add_argument("--force", action="store_true")
 args = parser.parse_args()
 
@@ -76,6 +79,7 @@ def _kv(items):
 
 out = os.path.abspath(args.outdir)
 os.makedirs(out, exist_ok=True)
+write_report_context(out, args.report_context)
 ad = sc.read_h5ad(args.h5ad)
 meta = ad.uns.get("msp", {})
 batch_col = args.batch_col or meta.get("batch_col")
