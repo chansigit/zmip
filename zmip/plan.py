@@ -31,7 +31,6 @@ import scanpy as sc
 import scipy.sparse as sp
 
 from msp.plots import save_single_umap, slug
-from msp.agent_util import run_query
 
 DEFAULT_MIN_CELLS = 800
 
@@ -171,12 +170,8 @@ If validation fails, fix the named problems and call it again."""
 
 
 async def _run(ad, coarse_col, labels, counts, knn, paga, outdir, min_cells, species, model, effort):
-    from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ResultMessage, ToolUseBlock,
-                                  create_sdk_mcp_server, tool)
+    from msp.harness import ToolSpec, run_agent
 
-    holder = {}
-
-    @tool("submit_plan", "Submit the lineage plan (JSON string, schema in the task).", {"plan_json": str})
     async def submit_plan(args):
         try:
             plan = json.loads(args["plan_json"])
@@ -186,47 +181,33 @@ async def _run(ad, coarse_col, labels, counts, knn, paga, outdir, min_cells, spe
         if problems:
             return {"content": [{"type": "text", "text": "fix and resubmit:\n- " + "\n- ".join(problems)}],
                     "is_error": True}
-        holder["plan"] = norm
         return {"content": [{"type": "text", "text": "plan accepted: " + ", ".join(
             f"{ln['name']}={ln['coarse_labels']} ({ln['n_cells']} cells, zoom={ln['zoom']})"
-            for ln in norm["lineages"])}]}
+            for ln in norm["lineages"])}], "_submitted": norm}
 
-    server = create_sdk_mcp_server(name="zmip", version="1.0.0", tools=[submit_plan])
-    fig_rel = os.path.join("figures", f"umap_{slug(coarse_col)}.png")
-    options = ClaudeAgentOptions(
-        mcp_servers={"zmip": server},
-        allowed_tools=["Read", "mcp__zmip__submit_plan"],
-        permission_mode="bypassPermissions",
-        disallowed_tools=["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch"],
-        max_buffer_size=50_000_000,
-        system_prompt=_prompt(coarse_col, labels, counts, knn, paga, min_cells, fig_rel, species),
-        cwd=os.path.abspath(outdir),
-        max_turns=30,
-        **({"model": model} if model else {}),
-        **({"effort": effort} if effort else {}),
+    tool = ToolSpec(
+        name="submit_plan",
+        description="Submit the lineage plan (JSON string, schema in the task).",
+        input_schema={"plan_json": str}, handler=submit_plan,
     )
-    result_text = None
-    async for message in run_query(f"Read {fig_rel}, then plan the lineages and call submit_plan.",
-                                   options, label="zmip plan"):
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, ToolUseBlock):
-                    print(f"== plan agent: {block.name}({str(next(iter(block.input.values()), ''))[:80]})",
-                          flush=True)
-        elif isinstance(message, ResultMessage):
-            result_text = message.result
-            if message.total_cost_usd:
-                print(f"== plan agent cost: ${message.total_cost_usd:.2f}", flush=True)
-    if "plan" not in holder:
-        raise RuntimeError(f"plan agent finished without an accepted submit_plan. Final reply:\n{result_text}")
-    holder["plan"]["agent_notes"] = result_text or ""
-    return holder["plan"]
+    fig_rel = os.path.join("figures", f"umap_{slug(coarse_col)}.png")
+    result = await run_agent(
+        tools=[tool], submit_tool="submit_plan",
+        prompt=f"Read {fig_rel}, then plan the lineages and call submit_plan.",
+        system_prompt=_prompt(coarse_col, labels, counts, knn, paga, min_cells, fig_rel, species),
+        cwd=os.path.abspath(outdir), model=model, effort=effort, max_turns=30,
+        allowed_builtin=("read",), max_buffer_size=50_000_000, label="zmip plan",
+    )
+    result.submitted["agent_notes"] = result.transcript_text or ""
+    return result.submitted
 
 
 def plan_lineages(ad, coarse_col, batch_col, outdir, min_cells=DEFAULT_MIN_CELLS, species=None,
                   model=None, effort=None):
     """Evidence → agent → validated plan, archived to outdir/zmip_plan.json
     (reused when present)."""
+    from msp.harness import default_model
+
     path = os.path.join(outdir, "zmip_plan.json")
     counts, knn, paga = lineage_evidence(ad, coarse_col, batch_col, outdir)
     if os.path.exists(path):
@@ -236,7 +217,7 @@ def plan_lineages(ad, coarse_col, batch_col, outdir, min_cells=DEFAULT_MIN_CELLS
         return plan
     labels = list(counts.index)
     plan = asyncio.run(_run(ad, coarse_col, labels, counts, knn, paga, outdir, min_cells, species,
-                            model, effort))
+                            model or default_model(), effort))
     plan["coarse_col"] = coarse_col
     with open(path, "w") as f:
         json.dump(plan, f, ensure_ascii=False, indent=2)
