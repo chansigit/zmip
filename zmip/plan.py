@@ -30,6 +30,7 @@ The plan is archived to zmip_plan.json and reused on resume.
 """
 
 import asyncio
+import copy
 import json
 import os
 
@@ -37,8 +38,10 @@ import numpy as np
 import pandas as pd
 import scanpy as sc
 import scipy.sparse as sp
-
+from anndata import AnnData
 from msp.plots import save_single_umap, slug
+
+from .cache import write_json
 
 DEFAULT_MIN_CELLS = 800
 
@@ -191,8 +194,14 @@ def lineage_evidence(ad, coarse_col, batch_col, outdir):
     paga = None
     if "neighbors" in ad.uns:
         try:
-            tmp = ad.copy() if ad.n_obs < 200_000 else ad
-            tmp.obs["_zmip_coarse"] = pd.Categorical(lab, categories=labels)
+            # PAGA uses the neighbor graph and labels, never expression matrices.
+            neighbors = copy.deepcopy(ad.uns["neighbors"])
+            keys = [neighbors.get("connectivities_key", "connectivities"),
+                    neighbors.get("distances_key", "distances")]
+            tmp = AnnData(obs=pd.DataFrame({"_zmip_coarse": pd.Categorical(lab, categories=labels)},
+                                          index=ad.obs_names.copy()),
+                          obsp={key: ad.obsp[key] for key in keys if key in ad.obsp},
+                          uns={"neighbors": neighbors})
             sc.tl.paga(tmp, groups="_zmip_coarse")
             P = np.asarray(tmp.uns["paga"]["connectivities"].todense())
             paga = pd.DataFrame(P.round(3), index=labels, columns=labels)
@@ -373,24 +382,29 @@ async def _run(coarse_col, labels, counts, knn, paga, islands, outdir, min_cells
 
 
 def plan_lineages(ad, coarse_col, batch_col, outdir, min_cells=DEFAULT_MIN_CELLS, species=None,
-                  model=None, effort=None):
+                  model=None, effort=None, force=False):
     """Evidence → agent → validated plan, archived to outdir/zmip_plan.json
     (reused when present)."""
     from harness_bridge import default_model
 
     path = os.path.join(outdir, "zmip_plan.json")
     counts, knn, paga, islands = lineage_evidence(ad, coarse_col, batch_col, outdir)
-    if os.path.exists(path):
+    if os.path.exists(path) and not force:
         with open(path) as f:
             plan = json.load(f)
-        # Archived names must obey the same directory rules as new submissions.
-        _lineage_slugs(ln["name"] for ln in plan["lineages"])
+        # Recheck current evidence, including the archived explicit island review.
+        candidate = dict(plan)
+        candidate["confirm_shared_islands"] = bool(plan.get("host_warnings"))
+        problems, normalized = validate_plan(candidate, list(counts.index), counts, min_cells, islands)
+        if problems or plan.get("min_cells") != min_cells or plan.get("coarse_col") != coarse_col:
+            raise ValueError(f"recorded plan does not match current input/options: {problems}; use --force")
+        if normalized["lineages"] != plan["lineages"]:
+            raise ValueError("recorded lineage counts or zoom decisions changed; use --force")
         print(f"== reusing recorded plan {path}", flush=True)
         return plan
     labels = list(counts.index)
     plan = asyncio.run(_run(coarse_col, labels, counts, knn, paga, islands, outdir, min_cells, species,
                             model or default_model(), effort))
     plan["coarse_col"] = coarse_col
-    with open(path, "w") as f:
-        json.dump(plan, f, ensure_ascii=False, indent=2)
+    write_json(path, plan)
     return plan

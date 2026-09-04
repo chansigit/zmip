@@ -27,15 +27,50 @@ from msp.annotate import _palette
 from msp.plots import UMAP_DPI, save_single_umap, umap_axes
 
 
+def _validate_partition(name, expected, survivors, removed, reassigned):
+    """A lineage's survivors and removals must partition its original cells."""
+    kept_ids = survivors.index
+    removed_ids = pd.Index(removed["cell"])
+    reassigned_ids = pd.Index(reassigned["cell"])
+    problems = []
+
+    def report(label, ids):
+        if len(ids):
+            problems.append(f"{label}: {len(ids)} cell(s), examples {ids[:5].tolist()}")
+
+    for label, ids in (("survivors", kept_ids), ("removed", removed_ids), ("reassigned", reassigned_ids)):
+        report(f"duplicate {label}", ids[ids.duplicated()].unique())
+        report(f"{label} outside the input lineage", ids.difference(expected))
+    report("cells both kept and removed", kept_ids.intersection(removed_ids))
+    report("input cells missing from both survivors and removals", expected.difference(kept_ids.union(removed_ids)))
+    report("reassigned cells absent from survivors", reassigned_ids.difference(kept_ids))
+    for label, table in (("removed", removed), ("reassigned", reassigned)):
+        wrong_source = table["lineage"].ne(name) | table["lineage"].isna()
+        report(f"{label} records with the wrong source lineage", pd.Index(table.loc[wrong_source, "cell"]))
+    if problems:
+        raise ValueError(f"lineage {name!r} has inconsistent cell coverage:\n- " + "\n- ".join(problems))
+
+
 def merge_back(ad, plan, results, outdir, coarse_col="msp_ann_coarse", fine_col="msp_ann_fine"):
     """results: {lineage_name: {"dir": path, "removed": df, "reassigned": df}}
     for every ZOOMED lineage (the lineage dir holds annotated.h5ad whose obs
     carries msp_ann_cluster/coarse/fine for the survivors)."""
-    figdir = os.path.join(outdir, "figures")
-    os.makedirs(figdir, exist_ok=True)
+    if not ad.obs_names.is_unique:
+        raise ValueError("input cell identifiers must be unique before merging")
+    names = [ln["name"] for ln in plan["lineages"]]
+    labels = [lab for ln in plan["lineages"] for lab in ln["coarse_labels"]]
+    if len(set(names)) != len(names) or len(set(labels)) != len(labels):
+        raise ValueError("plan must assign unique lineage names and each coarse label exactly once")
+    zoomed = {ln["name"] for ln in plan["lineages"] if ln["zoom"]}
+    if set(results) != zoomed:
+        raise ValueError(f"lineage results do not match the zoom plan: missing {sorted(zoomed - set(results))}, "
+                         f"unexpected {sorted(set(results) - zoomed)}")
     label_to_lineage = {lab: ln["name"] for ln in plan["lineages"] for lab in ln["coarse_labels"]}
     obs = ad.obs
     coarse0 = obs[coarse_col].astype(str)
+    unassigned = set(coarse0) - set(label_to_lineage)
+    if unassigned:
+        raise ValueError(f"input coarse labels missing from plan: {sorted(unassigned)}")
     zl = coarse0.map(label_to_lineage).astype(object)
     zcoarse = coarse0.astype(object).copy()
     zfine = obs[fine_col].astype(str).astype(object).copy()
@@ -46,8 +81,14 @@ def merge_back(ad, plan, results, outdir, coarse_col="msp_ann_coarse", fine_col=
 
     for name, r in results.items():
         sub = sc.read_h5ad(os.path.join(r["dir"], "annotated.h5ad"), backed="r")
-        so = sub.obs
-        idx = so.index.intersection(obs.index)
+        try:
+            # Only metadata is needed; release the backed file even on failure.
+            so = sub.obs.copy()
+        finally:
+            sub.file.close()
+        expected = obs.index[coarse0.map(label_to_lineage).eq(name)]
+        _validate_partition(name, expected, so, r["removed"], r["reassigned"])
+        idx = so.index
         zcluster.loc[idx] = name + ":" + so.loc[idx, "msp_ann_cluster"].astype(str)
         zcoarse.loc[idx] = so.loc[idx, "msp_ann_coarse"].astype(str)
         zfine.loc[idx] = so.loc[idx, "msp_ann_fine"].astype(str)
@@ -56,12 +97,14 @@ def merge_back(ad, plan, results, outdir, coarse_col="msp_ann_coarse", fine_col=
             ra_idx = ra.dropna().index
             zfrom.loc[ra_idx] = name
             zl.loc[ra_idx] = ra.loc[ra_idx].astype(str).map(label_to_lineage).values
-        sub.file.close()
         rm = r["removed"]
         removed |= obs.index.isin(rm["cell"])
         rm_frames.append(rm)
         ra_frames.append(r["reassigned"])
 
+    # Publish global annotations only after every lineage passes validation.
+    figdir = os.path.join(outdir, "figures")
+    os.makedirs(figdir, exist_ok=True)
     obs["zmip_lineage"] = zl.astype("category")
     obs["zmip_cluster"] = zcluster.astype("category")
     obs["zmip_ann_coarse"] = zcoarse.astype("category")

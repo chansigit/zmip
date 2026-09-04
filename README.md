@@ -32,12 +32,23 @@ The default is `HARNESS=openai` with Ark/Doubao Turbo. Set
 adapter. ZMIP imports the shared `harness_bridge` directly instead of routing
 agent execution through MSP.
 
-Re-running resumes: the plan is reused, lineages whose contract files
-(`annotation_proposal.json`, `annotated.h5ad`, `report.html`) exist are
-skipped; `--force` reruns markers and lineages but reuses the recorded plan.
+Re-running resumes only verified results for the same input and options.
+Private `.zmip-*.json` receipts record an input SHA-256, options and stage
+file hashes; a lineage depends on the current plan and marker list and is
+complete only after its H5AD, proposal, report and both audit CSVs are written
+and its cell coverage is validated. Interrupted or modified results rerun.
+Input or option changes, and legacy directories without receipts, require a
+new output directory or `--force`. **`--force` now recomputes the plan as well
+as markers and all zoomed lineages**; it does not preserve the old plan.
+Only one parent run may write to an output directory at a time. Hashing adds
+a sequential read of the input and any lineage H5AD considered for reuse;
+it does not load a second matrix into memory.
 Integration knobs (`--resolutions`,
 `--n-top-genes`, `--n-pcs`, `--n-neighbors`, `--harmony KEY=VALUE`) are the
 same as msp's and apply to every per-lineage re-embedding.
+`--resolutions` must include `1.0` and `2.0`, the parent and base clusterings
+used by annotation. Missing, duplicate, non-finite or non-positive values
+are rejected before reading the input or running an agent.
 
 ## Steps
 
@@ -72,6 +83,11 @@ selected for zoom, the msp labels pass through unchanged.
   for every other lineage → `obs["foreign_<lineage>"]`, per-cluster summaries
   and UMAPs. Evidence only: close lineages share programs, so the agent
   decides between doublet, ambient, misassignment and genuine biology.
+  Marker estimation requires at least two cells in both the lineage and
+  its reference. Ineligible lineages are logged and receive no marker list;
+  their cells remain in the reference for eligible lineages. When no lineage
+  is selected for zoom, marker computation is skipped and the marker CSV
+  retains its columns with no rows.
 - Agent on `msp_leiden_r2.0` of the subset, one Claude Code Task per
   cluster, tools `cluster_context` / `check_genes` / `check_deg` /
   `check_stability` / `subcluster` (reclustering allowed). Per cluster:
@@ -95,3 +111,21 @@ the global figures use msp's UMAP. Archives `zmip_removed.csv` (every
 removed cell with lineage, cluster, sources) and `zmip_reassigned.csv`.
 `report.html`: plan · lineages (linked per-lineage reports) · final
 annotation · removed & reassigned.
+
+Before publishing merged annotations, the host requires exactly one result
+for each zoomed lineage. Its survivors and removals must cover its input
+cells exactly once; duplicates, missing cells, cells from other lineages,
+and reassignment records outside the survivors are rejected. Input cell
+identifiers must also be unique. Failed validation leaves global output
+files untouched.
+
+DEG references retain the string API: `5,1` selects that exact current
+subcluster; use CSV quoting for a pool such as `"5,0","5,1"`. Ambiguous
+unquoted references return a correction request to the agent. This uses the
+same reference parser as the installed MSP `DegCache`.
+
+A failed lineage does not cancel independent lineages. If the parent is
+interrupted or fails while preparing or launching work, it terminates all
+active child process groups, escalates to SIGKILL after a grace period,
+and waits for the children and their log readers. Successfully completed
+lineages remain eligible for resume.

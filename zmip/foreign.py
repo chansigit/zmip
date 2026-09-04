@@ -23,21 +23,37 @@ import os
 import numpy as np
 import pandas as pd
 import scanpy as sc
-
+from anndata import AnnData
 from msp.plots import save_single_umap, slug
 
 TOP_N = 30
 MAX_PCT_OUT = 0.35  # a marker must be expressed in <35% of cells outside its lineage
+MARKER_COLUMNS = ["lineage", "rank", "gene", "logFC", "pct_in", "pct_out"]
 
 
 def lineage_markers(ad, lineage_col, outdir, top_n=TOP_N):
     """One marker list per lineage (all lineages, zoomed or not — a skipped
     tiny lineage is still something a zoomed one can be contaminated by)."""
     groups = [g for g in ad.obs[lineage_col].astype(str).unique()]
-    tmp = ad[:, :]  # Scanpy materializes this view when writing ranking results.
-    sc.tl.rank_genes_groups(tmp, lineage_col, groups=groups, method="wilcoxon", use_raw=False, pts=True)
-    rows = []
+    sizes = ad.obs[lineage_col].astype(str).value_counts()
+    eligible = []
     for g in groups:
+        n_group, n_rest = int(sizes[g]), ad.n_obs - int(sizes[g])
+        if min(n_group, n_rest) < 2:
+            print(f"== lineage {g!r}: cannot estimate markers with {n_group} lineage cell(s) and "
+                  f"{n_rest} reference cell(s); need at least 2 each — no foreign score for it", flush=True)
+        else:
+            eligible.append(g)
+    # Exclude tiny groups from testing, not from the other groups' reference cells.
+    if eligible:
+        # Ranking needs X and the grouping only, not raw/counts, graphs or embeddings.
+        tmp = AnnData(X=ad.X, obs=ad.obs[[lineage_col]].copy(),
+                      var=pd.DataFrame(index=ad.var_names.copy()))
+        if "log1p" in ad.uns:
+            tmp.uns["log1p"] = dict(ad.uns["log1p"])
+        sc.tl.rank_genes_groups(tmp, lineage_col, groups=eligible, method="wilcoxon", use_raw=False, pts=True)
+    rows = []
+    for g in eligible:
         df = sc.get.rank_genes_groups_df(tmp, group=g)
         df = df.rename(columns={"pct_nz_group": "pct_in", "pct_nz_reference": "pct_out"})
         df = df[(df["logfoldchanges"] > 0) & (df["pct_out"] < MAX_PCT_OUT)].head(top_n)
@@ -47,12 +63,11 @@ def lineage_markers(ad, lineage_col, outdir, top_n=TOP_N):
     # explicit columns: a run where no gene passes the pct_out filter for any
     # lineage (tiny/synthetic data, or one lineage swamping the rest) must
     # still yield an empty-but-well-formed table, not a KeyError below
-    out = pd.DataFrame(rows, columns=["lineage", "rank", "gene", "logFC", "pct_in", "pct_out"])
+    out = pd.DataFrame(rows, columns=MARKER_COLUMNS)
     out.to_csv(os.path.join(outdir, "lineage_markers.csv"), index=False)
-    for g in groups:
+    for g in eligible:
         if not (out["lineage"] == g).any():
             print(f"== no lineage markers pass pct_out<{MAX_PCT_OUT} for {g!r} — no foreign score for it", flush=True)
-    del tmp.uns["rank_genes_groups"]
     return {g: out.loc[out["lineage"] == g, "gene"].tolist() for g in groups}
 
 

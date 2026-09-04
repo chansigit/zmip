@@ -34,16 +34,30 @@ import os
 
 import numpy as np
 import pandas as pd
-
+from harness_bridge import default_model
 from msp.annotate import (
-    BASE_KEY, CONFIDENCES, PARENT_KEY, REMOVE_REASONS, _components, _load_paga_neighbors,
-    _plot, _prior_label_columns,
+    BASE_KEY,
+    CONFIDENCES,
+    PARENT_KEY,
+    REMOVE_REASONS,
+    _components,
+    _load_paga_neighbors,
+    _plot,
+    _prior_label_columns,
 )
 from msp.inspect import (
-    _DEG_SQL_DOC, _DEG_TOOL_DOC, DegCache, DegTables, _cluster_order, _file_inventory, _gene_table,
-    _load_removal_mask, _stability_table, _subcluster_once,
+    _DEG_SQL_DOC,
+    _DEG_TOOL_DOC,
+    DegCache,
+    DegTables,
+    _cluster_order,
+    _file_inventory,
+    _gene_table,
+    _load_removal_mask,
+    _parse_reference,
+    _stability_table,
+    _subcluster_once,
 )
-from harness_bridge import default_model
 from msp.report import generate_report
 
 REMOVE_BUDGET = 0.10  # agent-removed share of a lineage above which finalize asks for a second look
@@ -367,11 +381,10 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
         if c not in cur:
             return {"content": [{"type": "text", "text": f"unknown cluster {c!r}; current: {cur}"}], "is_error": True}
         reference = str(args.get("reference") or "rest").strip() or "rest"
-        if reference != "rest":
-            unknown = [g.strip() for g in reference.split(",") if g.strip() and g.strip() not in cur]
-            if unknown:
-                return {"content": [{"type": "text", "text": f"unknown reference cluster(s) {unknown}; current: {cur}"}],
-                        "is_error": True}
+        try:
+            _parse_reference(reference, cur)
+        except ValueError as exc:
+            return {"content": [{"type": "text", "text": str(exc) + f"; current: {cur}"}], "is_error": True}
         return {"content": [{"type": "text", "text": deg.table(
             state["key"], c, reference, int(args.get("top_n") or 20), args.get("min_logfc"), args.get("max_padj"),
             args.get("min_pct1"), args.get("max_pct2"))}]}
@@ -470,7 +483,8 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
         ToolSpec("check_genes", "Per-cluster mean expression and expressing-cell fraction for the given genes "
                  "(case-insensitive), on the current clustering.", {"genes": list}, check_genes),
         ToolSpec("check_deg", "On-demand wilcoxon DEG for one current cluster. reference='rest' (default) or a "
-                 "comma-separated list of other current cluster ids (e.g. its siblings). Cells already slated for "
+                 'single exact current ID or a CSV list. Quote IDs containing commas in pooled references, '
+                 'e.g. "5,0","5,1". Ambiguous unquoted lists are rejected. Cells already slated for '
                  "removal are excluded. Thresholds (0/empty = off): min_logfc, max_padj, min_pct1, max_pct2 — "
                  "ask for exactly the gene list you need. Cached per (cluster, reference).",
                  {"cluster": str, "reference": str, "top_n": int, "min_logfc": float, "max_padj": float,

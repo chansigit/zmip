@@ -27,7 +27,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -35,12 +37,13 @@ import time
 
 import pandas as pd
 import scanpy as sc
-
 from msp.integrate import integrate_adata
 from msp.plots import save_single_umap
 from msp.resources import available_cpus, available_memory_bytes, current_rss_bytes
 
-from .annotate import PREV_SUFFIX, PREVIOUS_COLS, annotate_lineage
+from . import cache
+from .annotate import BASE_KEY, PARENT_KEY, PREV_SUFFIX, PREVIOUS_COLS, annotate_lineage
+from .cli import add_integration_options, parse_harmony
 from .foreign import score_foreign
 from .plan import _lineage_slugs
 
@@ -57,8 +60,20 @@ def lineage_dir(outdir, name):
     return directory
 
 
+CONTRACT_FILES = ("annotation_proposal.json", "annotated.h5ad", "report.html",
+                  "annotation_removed.csv", "annotation_reassigned.csv")
+
+
+def _generation(outdir):
+    # A lineage also depends on the exact plan and foreign-marker lists.
+    return {"run_id": cache.run_id(outdir), "dependencies": {
+        name: cache.file_digest(os.path.join(outdir, name))
+        for name in ("zmip_plan.json", "lineage_markers.csv")
+        if os.path.exists(os.path.join(outdir, name))}}
+
+
 def contract_done(d):
-    return all(os.path.exists(os.path.join(d, f)) for f in ("annotation_proposal.json", "annotated.h5ad", "report.html"))
+    return cache.valid(d, "complete", _generation(os.path.dirname(d)), CONTRACT_FILES)
 
 
 def load_result(d):
@@ -80,12 +95,32 @@ def subset_for(ad, labels, coarse_col, fine_col):
     return sub
 
 
+def validate_resolutions(resolutions):
+    """Require freshly computed base and parent clusterings before any work."""
+    values = tuple(float(r) for r in resolutions)
+    if not values or any(not math.isfinite(r) or r <= 0 for r in values):
+        raise ValueError("--resolutions must contain finite, positive values")
+    if len(set(values)) != len(values):
+        raise ValueError("--resolutions must contain unique values")
+    required = {float(key.rsplit("_r", 1)[1]) for key in (BASE_KEY, PARENT_KEY)}
+    missing = sorted(required - set(values))
+    if missing:
+        raise ValueError(f"--resolutions must include {sorted(required)} for zoom-in annotation; "
+                         f"missing {missing}. Inherited clusterings cannot substitute for this round's results.")
+    return values
+
+
 def run_lineage(sub, name, labels, all_labels, markers, outdir, *, batch_col, species, h5ad_path, resolutions,
                 n_top_genes, n_pcs, n_neighbors, harmony_kwargs, keys_for_foreign, language, model, effort,
                 max_turns):
     """sub: the lineage subset from subset_for(). Writes <outdir>/<slug>/ and
     returns its result record."""
+    resolutions = validate_resolutions(resolutions)
     d = lineage_dir(outdir, name)
+    os.makedirs(d, exist_ok=True)
+    cache.invalidate(d, "complete")
+    generation = _generation(outdir)
+    expected = sub.obs_names.copy()
     print(f"== [{name}] re-embedding {sub.n_obs} cells", flush=True)
     integrate_adata(sub, batch_col, d, species=species, resolutions=tuple(resolutions),
                     n_top_genes=n_top_genes, n_pcs=n_pcs, n_neighbors=n_neighbors,
@@ -99,11 +134,21 @@ def run_lineage(sub, name, labels, all_labels, markers, outdir, *, batch_col, sp
         n = sub.obs[col].nunique()
         save_single_umap(sub, col, os.path.join(figdir, f"umap_{col}.png"), repel=True,
                          repel_fontsize=8 if n > 15 else 11, figsize=(9, 9) if n > 15 else None)
-    _, rm, ra = annotate_lineage(
+    annotate_lineage(
         sub, d, name, labels, sorted(set(all_labels) - set(labels)), foreign_cols,
         species=species, language=language, model=model, effort=effort, max_turns=max_turns,
     )
-    return {"dir": d, "removed": rm, "reassigned": ra}
+    # Validate the files that resume will read, not only the in-memory tables.
+    from .merge import _validate_partition
+
+    result = load_result(d)
+    kept = sc.read_h5ad(os.path.join(d, "annotated.h5ad"), backed="r")
+    try:
+        _validate_partition(name, expected, kept.obs, result["removed"], result["reassigned"])
+    finally:
+        kept.file.close()
+    cache.seal(d, "complete", generation, CONTRACT_FILES)
+    return result
 
 
 # ---------------------------------------------------------------- the pool
@@ -136,6 +181,48 @@ def _pump(proc, tag):
             print(f"[{tag}] {line}", flush=True)
 
 
+def _signal_group(proc, sig):
+    try:
+        os.killpg(proc.pid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def _terminate_pool(signum, frame):
+    # Convert scheduler termination into an exception so the pool's finally runs.
+    raise SystemExit(128 + signum)
+
+
+def _finish_child(proc, log_thread):
+    proc.wait()
+    # A finished lineage must not leave harness descendants holding its pipe.
+    _signal_group(proc, signal.SIGTERM)
+    if log_thread.ident is not None:
+        log_thread.join(timeout=5)
+        if log_thread.is_alive():
+            _signal_group(proc, signal.SIGKILL)
+            log_thread.join(timeout=5)
+    if not log_thread.is_alive():
+        proc.stdout.close()
+
+
+def _stop_children(running):
+    children = list(running.values())
+    for proc, _, _, _ in children:
+        _signal_group(proc, signal.SIGTERM)
+    deadline = time.monotonic() + 5
+    for proc, _, _, _ in children:
+        try:
+            proc.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            pass
+    # Kill the whole group even if its leader exited before a descendant.
+    for proc, _, _, _ in children:
+        _signal_group(proc, signal.SIGKILL)
+    for proc, _, _, log_thread in children:
+        _finish_child(proc, log_thread)
+
+
 def run_lineages_parallel(ad, todo, all_labels, outdir, child_args, *, coarse_col, fine_col):
     """todo: plan entries (name, coarse_labels, n_cells) still to run. Writes
     each lineage's subset to <lineage dir>/subset.h5ad and runs
@@ -152,67 +239,67 @@ def run_lineages_parallel(ad, todo, all_labels, outdir, child_args, *, coarse_co
         env[k] = str(threads)
 
     pending = list(todo)
-    running = {}  # name -> (proc, est_bytes, t0)
+    running = {}  # name -> (proc, est_bytes, t0, log_thread)
     failed, finished = {}, []
-    while pending or running:
-        # reap
-        for name in list(running):
-            proc, est, t0 = running[name]
-            rc = proc.poll()
-            if rc is None:
-                continue
-            proc.stdout.close()
-            del running[name]
-            took = (time.time() - t0) / 60
-            if rc == 0 and contract_done(lineage_dir(outdir, name)):
-                finished.append(name)
-                print(f"== [{name}] lineage done in {took:.1f} min", flush=True)
-            else:
-                failed[name] = rc
-                print(f"== [{name}] lineage FAILED (exit {rc}) after {took:.1f} min", flush=True)
-        # launch
-        used = sum(est for _, est, _ in running.values())
-        while pending and len(running) < max_parallel:
-            ln = pending[0]
-            est = _estimate_bytes(ln["n_cells"])
-            if running and used + est > budget:
-                break  # wait for memory; an idle pool always admits the next one
-            pending.pop(0)
-            name = ln["name"]
-            d = lineage_dir(outdir, name)
-            os.makedirs(d, exist_ok=True)
-            subset_path = os.path.join(d, SUBSET_FILE)
-            subset_for(ad, ln["coarse_labels"], coarse_col, fine_col).write_h5ad(subset_path)
-            cmd = [sys.executable, "-m", "zmip.lineage", outdir, name, "--subset", subset_path, *child_args]
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                    env=env, bufsize=1)
-            threading.Thread(target=_pump, args=(proc, name), daemon=True).start()
-            running[name] = (proc, est, time.time())
-            used += est
-            print(f"== [{name}] lineage started: {ln['n_cells']} cells, est {est / 2**30:.1f} GiB, "
-                  f"{len(running)} running, {len(pending)} waiting", flush=True)
-        if running:
-            time.sleep(5)
+    main_thread = threading.current_thread() is threading.main_thread()
+    if main_thread:
+        previous_term = signal.signal(signal.SIGTERM, _terminate_pool)
+    try:
+        while pending or running:
+            # reap
+            for name in list(running):
+                proc, est, t0, log_thread = running[name]
+                rc = proc.poll()
+                if rc is None:
+                    continue
+                _finish_child(proc, log_thread)
+                del running[name]
+                took = (time.time() - t0) / 60
+                if rc == 0 and contract_done(lineage_dir(outdir, name)):
+                    finished.append(name)
+                    print(f"== [{name}] lineage done in {took:.1f} min", flush=True)
+                else:
+                    failed[name] = rc
+                    print(f"== [{name}] lineage FAILED (exit {rc}) after {took:.1f} min", flush=True)
+            # launch
+            used = sum(est for _, est, _, _ in running.values())
+            while pending and len(running) < max_parallel:
+                ln = pending[0]
+                est = _estimate_bytes(ln["n_cells"])
+                if running and used + est > budget:
+                    break  # wait for memory; an idle pool always admits the next one
+                pending.pop(0)
+                name = ln["name"]
+                d = lineage_dir(outdir, name)
+                os.makedirs(d, exist_ok=True)
+                subset_path = os.path.join(d, SUBSET_FILE)
+                subset_for(ad, ln["coarse_labels"], coarse_col, fine_col).write_h5ad(subset_path)
+                cmd = [sys.executable, "-m", "zmip.lineage", outdir, name, "--subset", subset_path, *child_args]
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                        env=env, bufsize=1, start_new_session=True)
+                log_thread = threading.Thread(target=_pump, args=(proc, name), daemon=True)
+                running[name] = (proc, est, time.time(), log_thread)
+                log_thread.start()
+                used += est
+                print(f"== [{name}] lineage started: {ln['n_cells']} cells, est {est / 2**30:.1f} GiB, "
+                      f"{len(running)} running, {len(pending)} waiting", flush=True)
+            if running:
+                time.sleep(5)
+    finally:
+        # Covers subset writes, spawn failures, validation errors and Ctrl-C.
+        if main_thread:
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        try:
+            _stop_children(running)
+        finally:
+            if main_thread:
+                signal.signal(signal.SIGTERM, previous_term)
     if failed:
         raise RuntimeError(f"zmip lineage(s) failed: {failed} — re-run to resume (finished lineages are skipped)")
     return {name: load_result(lineage_dir(outdir, name)) for name in finished}
 
 
 # ---------------------------------------------------------------- subprocess entry
-
-def _kv(items):
-    def conv(v):
-        for cast in (int, float):
-            try:
-                return cast(v)
-            except ValueError:
-                pass
-        return v
-    out = {}
-    for it in items:
-        k, v = it.split("=", 1)
-        out[k.strip()] = [conv(x) for x in v.split(",")] if "," in v else conv(v)
-    return out
 
 
 def main(argv=None):
@@ -223,21 +310,24 @@ def main(argv=None):
     parser.add_argument("--h5ad", required=True, help="the round's input h5ad (recorded in the lineage's uns)")
     parser.add_argument("--batch-col", required=True)
     parser.add_argument("--species", default=None)
-    parser.add_argument("--resolutions", type=float, nargs="+", default=[0.3, 1.0, 2.0])
-    parser.add_argument("--n-top-genes", type=int, default=2000)
-    parser.add_argument("--n-pcs", type=int, default=50)
-    parser.add_argument("--n-neighbors", type=int, default=15)
-    parser.add_argument("--harmony", action="append", default=[])
+    add_integration_options(parser)
     parser.add_argument("--language", default="English")
     parser.add_argument("--model", default=None)
     parser.add_argument("--effort", default=None)
     parser.add_argument("--max-turns", type=int, default=200)
     args = parser.parse_args(argv)
+    try:
+        args.resolutions = validate_resolutions(args.resolutions)
+        harmony_kwargs = parse_harmony(args.harmony)
+    except ValueError as exc:
+        parser.error(str(exc))
 
-    plan = json.load(open(os.path.join(args.outdir, "zmip_plan.json")))
+    with open(os.path.join(args.outdir, "zmip_plan.json")) as stream:
+        plan = json.load(stream)
     entry = next(ln for ln in plan["lineages"] if ln["name"] == args.name)
     all_labels = {lab for ln in plan["lineages"] for lab in ln["coarse_labels"]}
-    mk = pd.read_csv(os.path.join(args.outdir, "lineage_markers.csv"))
+    mk = pd.read_csv(os.path.join(args.outdir, "lineage_markers.csv"),
+                     keep_default_na=False, dtype={"lineage": str, "gene": str})
     markers = {g: mk.loc[mk["lineage"] == g, "gene"].tolist() for g in mk["lineage"].unique()}
     sub = sc.read_h5ad(args.subset)
     os.remove(args.subset)
@@ -245,7 +335,7 @@ def main(argv=None):
     run_lineage(sub, args.name, entry["coarse_labels"], all_labels, markers, args.outdir,
                 batch_col=args.batch_col, species=args.species, h5ad_path=args.h5ad,
                 resolutions=args.resolutions, n_top_genes=args.n_top_genes, n_pcs=args.n_pcs,
-                n_neighbors=args.n_neighbors, harmony_kwargs=_kv(args.harmony), keys_for_foreign=keys_for_foreign,
+                n_neighbors=args.n_neighbors, harmony_kwargs=harmony_kwargs, keys_for_foreign=keys_for_foreign,
                 language=args.language, model=args.model, effort=args.effort, max_turns=args.max_turns)
 
 
