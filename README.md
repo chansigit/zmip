@@ -7,8 +7,9 @@ misassigned cells to the lineage they belong to. Same pattern as osp/msp —
 fixed computation, narrow agent decisions validated by the host, one
 self-contained report per lineage plus a global one.
 
-See [VALIDATION.md](VALIDATION.md) for the isolated installation checks and
-real-model workflow validation.
+See [Validation status](#validation-status) for the tested scope and remaining
+validation work, and [VALIDATION.md](VALIDATION.md) for reproducible checks and
+execution records.
 
 ```
 msp annotated.h5ad ──▶ plan ──▶ per lineage: re-embed → foreign scores → agent ──▶ merge
@@ -17,13 +18,16 @@ msp annotated.h5ad ──▶ plan ──▶ per lineage: re-embed → foreign sc
 
 ## Install
 
+Run from this checkout with `uv` installed and local source checkouts of
+MSP, agent-harness-bridge and standissect-lite:
+
 ```bash
 ./scripts/validate_install.sh /absolute/path/to/validation \
     /path/to/msp /path/to/agent-harness-bridge /path/to/standissect-lite
 ```
 
 This development revision requires compatible source revisions of MSP and the
-shared harness. The configured package index does not currently supply
+shared harness. During the 2026-09-04 validation, the configured package index did not supply
 `agent-harness-bridge[all]==0.1.0`; a bare `pip install zmip` therefore does not
 reproduce this revision. The script builds four non-editable wheels, creates a
 fresh CPython 3.12 environment, installs with `constraints-runtime.txt`, runs
@@ -40,7 +44,7 @@ Use the resulting `validation/env/bin/python` to run zmip.
 
 ```bash
 python -m zmip msp_out/annotated.h5ad --outdir zmip_out \
-    --model doubao-seed-2-1-turbo-260628 [--min-cells 800]
+    --model doubao-seed-2-1-turbo-260628 --min-cells 800
 python -m zmip.report zmip_out          # rebuild the global report only
 ```
 
@@ -49,6 +53,16 @@ The default is `HARNESS=openai` with Ark/Doubao Turbo. Set
 adapter. ZMIP imports the shared `harness_bridge` directly instead of routing
 agent execution through MSP.
 
+Use an MSP `annotated.h5ad` with unique cell IDs, coarse/fine annotations,
+the global graph and UMAP, and expression/counts required by MSP integration.
+Annotation columns default to `msp_ann_coarse` and `msp_ann_fine`; override
+them with `--coarse-col` and `--fine-col`. Batch and species metadata default
+to `uns['msp']`; pass `--batch-col` and `--species` when needed.
+Set `ZMIP_PARALLEL=2`, for example, to cap concurrent lineage processes;
+the scheduler also considers available CPU and estimated memory.
+
+### Resume and recompute
+
 Re-running resumes only verified results for the same input and options.
 Private `.zmip-*.json` receipts record an input SHA-256, options and stage
 file hashes. The identity also includes Python/dependency versions and source
@@ -56,7 +70,7 @@ hashes for zmip, MSP, the harness and standissect-lite, including editable
 changes without a version bump. A lineage depends on the current plan and marker list and is
 complete only after its H5AD, proposal, report and both audit CSVs are written
 and its cell coverage is validated. Interrupted or modified results rerun.
-Input or option changes, and legacy directories without receipts, require a
+Input, option or runtime changes, and legacy directories without receipts, require a
 new output directory or `--force`. **`--force` now recomputes the plan as well
 as markers and all zoomed lineages**; it does not preserve the old plan.
 Only one parent run may write to an output directory at a time. Hashing adds
@@ -107,7 +121,7 @@ selected for zoom, the msp labels pass through unchanged.
   their cells remain in the reference for eligible lineages. When no lineage
   is selected for zoom, marker computation is skipped and the marker CSV
   retains its columns with no rows.
-- Agent on `msp_leiden_r2.0` of the subset, one Claude Code Task per
+- Agent on `msp_leiden_r2.0` of the subset, one task per
   cluster, tools `cluster_context` / `check_genes` / `check_deg` /
   `check_stability` / `subcluster` (reclustering allowed). Per cluster:
   distinctness → identity → foreign signal → merge, and one action:
@@ -171,3 +185,26 @@ interrupted or fails while preparing or launching work, it terminates all
 active child process groups, escalates to SIGKILL after a grace period,
 and waits for the children and their log readers. Successfully completed
 lineages remain eligible for resume.
+
+## Validation status
+
+As of 2026-09-04, the fixes identified in the code-quality review are committed.
+The validation completed so far is:
+
+| Check | Result |
+| --- | --- |
+| Isolated source-wheel installation | 105 compatible packages; 99 tests passed |
+| Interruption and output integrity | Regression coverage for child cleanup, publication rollback, damaged caches and CSV/H5AD consistency |
+| Real OpenAI/Doubao workflow | Planning through final report on 256 Fu2022 cells and 17,813 genes |
+| Independent data checks | Cell coverage, gene order, original annotations, expression, raw and input layers preserved |
+| Resume and report rebuilding | Successful; the repeated workflow made zero model calls |
+
+Remaining work is validation and distribution: full-dataset performance and
+memory measurements, fresh end-to-end checks for Claude and DeepSeek, and
+package-index installation once the required harness release is available.
+The real-model check retained all 256 cells, so removal and reassignment were
+exercised by synthetic regression tests only. These results establish a small
+workflow check, not biological accuracy or performance at full scale.
+
+See [VALIDATION.md](VALIDATION.md) for the exact environment, run parameters,
+input hash and execution-record locations.
