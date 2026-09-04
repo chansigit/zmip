@@ -41,8 +41,8 @@ from msp.annotate import (
     _plot, _prior_label_columns,
 )
 from msp.inspect import (
-    DegCache, _cluster_order, _file_inventory, _gene_table, _load_removal_mask,
-    _stability_table, _subcluster_once,
+    _DEG_SQL_DOC, _DEG_TOOL_DOC, DegCache, DegTables, _cluster_order, _file_inventory, _gene_table,
+    _load_removal_mask, _stability_table, _subcluster_once,
 )
 from msp.harness import default_model
 from msp.report import generate_report
@@ -55,7 +55,7 @@ PREV_SUFFIX = "_prev"                                 # msp_ann_coarse_prev / ms
 
 # ---------------------------------------------------------------- context
 
-def _context(ad, key, cluster, batch_col, prior_cols, paga, pre_removed, foreign_cols, lineage_labels):
+def _context(ad, key, cluster, batch_col, prior_cols, paga, pre_removed, foreign_cols, lineage_labels, tables=None):
     lab = ad.obs[key].astype(str)
     m = (lab == cluster).values
     if not m.any():
@@ -78,6 +78,10 @@ def _context(ad, key, cluster, batch_col, prior_cols, paga, pre_removed, foreign
                      (", ".join(f"{i}:{v}" for i, v in sib.items()) if len(sib) else "none"))
     if key == BASE_KEY and cluster in paga:
         lines.append(f"  PAGA nearest neighbours ({BASE_KEY}): {', '.join(paga[cluster])}")
+    if tables is not None:
+        mk = tables.markers_text(key, cluster)
+        if mk:
+            lines.append(mk)
     vc = sub[batch_col].value_counts(normalize=True)
     lines.append(f"  samples: {sub[batch_col].nunique()}/{ad.obs[batch_col].nunique()} present, "
                  f"dominant sample share {vc.iloc[0]:.2f} ({vc.index[0]})")
@@ -287,7 +291,9 @@ All relevant files (paths relative to the working directory):
 {_file_inventory(outdir)}
 
 What they are: deg_global_{{key}}.csv / deg_local_{{key}}.csv (subset DEG at r1.0/r2.0, computed after \
-excluding preannotation_removal.csv cells), paga_neighbors_*.csv, cluster_qc_*.csv, \
+excluding preannotation_removal.csv cells — TOO LARGE to Read: cluster_context carries each cluster's top-12 \
+global/local markers, deg_lookup / deg_sql retrieve anything else from them; check_deg is for comparisons \
+the tables don't hold, e.g. subclustered ids), paga_neighbors_*.csv, cluster_qc_*.csv, \
 cell_outlier_summary.csv, stress_clusters.csv, minor_sibling_qc.csv, foreign_signal_{{key}}.csv (per-cluster \
 foreign score summary), figures/umap_*.png (subset UMAPs by sample / resolution / previous labels), \
 figures/qc_umap_*.png (QC metrics and foreign scores on the subset UMAP), \
@@ -297,7 +303,7 @@ Mandatory workflow:
 1. TaskCreate one task per base cluster ("annotate cluster <id>") before analysis; TaskUpdate to completed \
 only after its submit_cluster succeeded (a split parent's task becomes its subclusters' tasks).
 2. Read the figures first (resolution UMAPs, umap_msp_ann_fine_prev, sample mixing, foreign score UMAPs), \
-then deg_global_{BASE_KEY}.csv, deg_local_{BASE_KEY}.csv, foreign_signal_{BASE_KEY}.csv once.
+then foreign_signal_{BASE_KEY}.csv once (DEG comes through cluster_context / deg_lookup / deg_sql, not Read).
 3. Per cluster: cluster_context, check_genes (batch dozens of genes), check_deg / check_stability when in \
 doubt, then submit_cluster (resubmit to revise; last wins).
 4. finalize_annotation when every task is completed; fix what it reports and call again.
@@ -318,6 +324,8 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
     state = {"key": BASE_KEY, "n_sub": 0}
     entries, holder = {}, {}
     deg = DegCache(ad, outdir, pre_removed, label=f"zmip {lineage}")
+    tables = DegTables(outdir, base_key=BASE_KEY)
+    print(f"== [{lineage}] precomputed DEG tables loaded: {tables.n_rows} rows for keys {tables.keys}", flush=True)
 
     def current():
         return _cluster_order(ad.obs[state["key"]].astype(str))
@@ -325,7 +333,16 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
     async def cluster_context(args):
         return {"content": [{"type": "text", "text": _context(
             ad, state["key"], str(args["cluster"]), batch_col, prior_cols, paga, pre_removed, foreign_cols,
-            lineage_labels)}]}
+            lineage_labels, tables)}]}
+
+    async def deg_lookup(args):
+        return {"content": [{"type": "text", "text": tables.lookup(
+            args.get("cluster", ""), args.get("gene", ""), args.get("view", "both"), args.get("key", ""),
+            args.get("top_n") or 20, args.get("min_logfc"), args.get("max_padj"), args.get("min_pct1"),
+            args.get("max_pct2"))}]}
+
+    async def deg_sql(args):
+        return {"content": [{"type": "text", "text": tables.sql(args.get("query", ""))}]}
 
     async def check_genes(args):
         genes = args["genes"]
@@ -344,7 +361,9 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
             if unknown:
                 return {"content": [{"type": "text", "text": f"unknown reference cluster(s) {unknown}; current: {cur}"}],
                         "is_error": True}
-        return {"content": [{"type": "text", "text": deg.table(state["key"], c, reference, int(args.get("top_n") or 20))}]}
+        return {"content": [{"type": "text", "text": deg.table(
+            state["key"], c, reference, int(args.get("top_n") or 20), args.get("min_logfc"), args.get("max_padj"),
+            args.get("min_pct1"), args.get("max_pct2"))}]}
 
     async def check_stability(args):
         return {"content": [{"type": "text",
@@ -433,11 +452,18 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
         ToolSpec("cluster_context", "Non-expression context for one current cluster: size, removal share, r1.0 "
                  "parent + siblings, PAGA neighbours, samples, QC medians, foreign-lineage scores, previous-round "
                  "labels, prior label compositions.", {"cluster": str}, cluster_context),
+        ToolSpec("deg_lookup", _DEG_TOOL_DOC,
+                 {"cluster": str, "gene": str, "view": str, "key": str, "top_n": int, "min_logfc": float,
+                  "max_padj": float, "min_pct1": float, "max_pct2": float}, deg_lookup),
+        ToolSpec("deg_sql", _DEG_SQL_DOC, {"query": str}, deg_sql),
         ToolSpec("check_genes", "Per-cluster mean expression and expressing-cell fraction for the given genes "
                  "(case-insensitive), on the current clustering.", {"genes": list}, check_genes),
         ToolSpec("check_deg", "On-demand wilcoxon DEG for one current cluster. reference='rest' (default) or a "
                  "comma-separated list of other current cluster ids (e.g. its siblings). Cells already slated for "
-                 "removal are excluded.", {"cluster": str, "reference": str, "top_n": int}, check_deg),
+                 "removal are excluded. Thresholds (0/empty = off): min_logfc, max_padj, min_pct1, max_pct2 — "
+                 "ask for exactly the gene list you need. Cached per (cluster, reference).",
+                 {"cluster": str, "reference": str, "top_n": int, "min_logfc": float, "max_padj": float,
+                  "min_pct1": float, "max_pct2": float}, check_deg),
         ToolSpec("check_stability", "How one current cluster decomposes across the other leiden resolutions "
                  "of this subset (r0.3/r1.0/r2.0).", {"cluster": str}, check_stability),
         ToolSpec("subcluster", "Split one heterogeneous current cluster with leiden restrict_to at the given "

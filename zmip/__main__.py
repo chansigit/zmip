@@ -4,10 +4,10 @@
             which to zoom (>= --min-cells)                 → zmip_plan.json
   markers   lineage-level marker lists for foreign-lineage scores
                                                            → lineage_markers.csv
-  per lineage (sequential): subset → msp.integrate_adata (re-embed) →
-            foreign scores → annotation agent (refine / remove / reassign /
-            recluster) → <lineage>/{annotation_proposal.json, annotated.h5ad,
-            report.html}
+  per lineage (concurrently, see zmip.lineage): subset → msp.integrate_adata
+            (re-embed) → foreign scores → annotation agent (refine / remove /
+            reassign / recluster) → <lineage>/{annotation_proposal.json,
+            annotated.h5ad, report.html}
   merge     fold back, real removal                        → annotated_zmip.h5ad,
             zmip_removed.csv, zmip_reassigned.csv, report.html
 
@@ -24,11 +24,10 @@ import sys
 import pandas as pd
 import scanpy as sc
 
-from msp.integrate import integrate_adata
-from msp.plots import save_single_umap, slug
+from msp.plots import slug
 
-from .annotate import PREV_SUFFIX, PREVIOUS_COLS, annotate_lineage
-from .foreign import lineage_markers, score_foreign
+from .foreign import lineage_markers
+from .lineage import contract_done, lineage_dir, load_result, run_lineage, run_lineages_parallel, subset_for
 from .merge import merge_back
 from .plan import DEFAULT_MIN_CELLS, plan_lineages
 from .report import generate_report
@@ -119,38 +118,38 @@ results = {}
 harmony_kwargs = _kv(args.harmony)
 keys_for_foreign = [f"msp_leiden_r{r}" for r in args.resolutions if r in (1.0, 2.0)]
 
+todo = []
 for ln in zoomed:
-    name, labels = ln["name"], ln["coarse_labels"]
-    d = os.path.join(out, slug(name))
-    contract = [os.path.join(d, f) for f in ("annotation_proposal.json", "annotated.h5ad", "report.html")]
-    if all(os.path.exists(p) for p in contract) and not args.force:
-        print(f"== [{name}] already done — skipping (resume)", flush=True)
-        results[name] = {"dir": d, "removed": pd.read_csv(os.path.join(d, "annotation_removed.csv")),
-                         "reassigned": pd.read_csv(os.path.join(d, "annotation_reassigned.csv"))}
-        continue
-    sub = ad[ad.obs[args.coarse_col].astype(str).isin(labels).values].copy()
-    for c in PREVIOUS_COLS:
-        src = {"msp_ann_coarse": args.coarse_col, "msp_ann_fine": args.fine_col}[c]
-        sub.obs[c + PREV_SUFFIX] = sub.obs[src].astype(str).astype("category")
-    del sub.obs["_zmip_lineage"]
-    print(f"== [{name}] re-embedding {sub.n_obs} cells", flush=True)
-    integrate_adata(sub, batch_col, d, species=species, resolutions=tuple(args.resolutions),
-                    n_top_genes=args.n_top_genes, n_pcs=args.n_pcs, n_neighbors=args.n_neighbors,
-                    harmony_kwargs=harmony_kwargs, inputs=[args.h5ad],
-                    meta_extra={"zmip_lineage": name, "zmip_coarse_labels": list(labels)})
-    figdir = os.path.join(d, "figures")
-    print(f"== [{name}] foreign-lineage scores", flush=True)
-    foreign_cols = score_foreign(sub, markers, name, keys_for_foreign, d, figdir)
-    for c in PREVIOUS_COLS:
-        col = c + PREV_SUFFIX
-        n = sub.obs[col].nunique()
-        save_single_umap(sub, col, os.path.join(figdir, f"umap_{col}.png"), repel=True,
-                         repel_fontsize=8 if n > 15 else 11, figsize=(9, 9) if n > 15 else None)
-    proposal, rm, ra = annotate_lineage(sub, d, name, labels, sorted(all_labels - set(labels)), foreign_cols,
-                                        species=species, language=args.language, model=args.model,
-                                        effort=args.effort, max_turns=args.max_turns)
-    results[name] = {"dir": d, "removed": rm, "reassigned": ra}
-    del sub
+    d = lineage_dir(out, ln["name"])
+    if contract_done(d) and not args.force:
+        print(f"== [{ln['name']}] already done — skipping (resume)", flush=True)
+        results[ln["name"]] = load_result(d)
+    else:
+        todo.append(ln)
+
+common = dict(batch_col=batch_col, species=species, h5ad_path=args.h5ad, resolutions=args.resolutions,
+              n_top_genes=args.n_top_genes, n_pcs=args.n_pcs, n_neighbors=args.n_neighbors,
+              harmony_kwargs=harmony_kwargs, keys_for_foreign=keys_for_foreign, language=args.language,
+              model=args.model, effort=args.effort, max_turns=args.max_turns)
+if len(todo) == 1 or os.environ.get("ZMIP_PARALLEL", "").strip() == "1":
+    for ln in todo:  # in-process, exactly the old sequential path
+        sub = subset_for(ad, ln["coarse_labels"], args.coarse_col, args.fine_col)
+        results[ln["name"]] = run_lineage(sub, ln["name"], ln["coarse_labels"], all_labels, markers, out, **common)
+        del sub
+elif todo:
+    child_args = ["--h5ad", args.h5ad, "--batch-col", batch_col, "--resolutions", *map(str, args.resolutions),
+                  "--n-top-genes", str(args.n_top_genes), "--n-pcs", str(args.n_pcs),
+                  "--n-neighbors", str(args.n_neighbors), "--language", args.language, "--max-turns", str(args.max_turns)]
+    for kv in args.harmony:
+        child_args += ["--harmony", kv]
+    if species:
+        child_args += ["--species", species]
+    if args.model:
+        child_args += ["--model", args.model]
+    if args.effort:
+        child_args += ["--effort", args.effort]
+    results.update(run_lineages_parallel(ad, todo, all_labels, out, child_args,
+                                         coarse_col=args.coarse_col, fine_col=args.fine_col))
 
 merge_back(ad, plan, results, out, coarse_col=args.coarse_col, fine_col=args.fine_col)
 print(f"== report: {generate_report(out)}", flush=True)
