@@ -26,6 +26,8 @@ import scanpy as sc
 from msp.annotate import _palette
 from msp.plots import UMAP_DPI, save_single_umap, umap_axes
 
+from . import publication
+
 
 def _validate_partition(name, expected, survivors, removed, reassigned):
     """A lineage's survivors and removals must partition its original cells."""
@@ -51,7 +53,39 @@ def _validate_partition(name, expected, survivors, removed, reassigned):
         raise ValueError(f"lineage {name!r} has inconsistent cell coverage:\n- " + "\n- ".join(problems))
 
 
-def merge_back(ad, plan, results, outdir, coarse_col="msp_ann_coarse", fine_col="msp_ann_fine"):
+def _validate_annotation(name, survivors, reassigned, own_labels, all_labels):
+    """Audit CSVs and H5AD must describe exactly the same reassignment decisions."""
+    required = {"msp_ann_cluster", "msp_ann_coarse", "msp_ann_fine"}
+    if not required.issubset(survivors) or not {"cell", "cluster", "reassign_to", "fine_label"}.issubset(reassigned):
+        raise ValueError(f"lineage {name!r}: missing annotation/audit columns")
+    problems = []
+
+    def report(label, mask):
+        ids = survivors.index[mask]
+        if len(ids):
+            problems.append(f"{label}: {len(ids)} cell(s), examples {ids[:5].tolist()}")
+
+    target = survivors.get("zmip_reassigned_to", pd.Series(None, index=survivors.index, dtype=object))
+    moved = target.notna()
+    audited = survivors.index.isin(reassigned["cell"])
+    report("reassignment membership differs between H5AD and CSV", moved != audited)
+    report("invalid or same-lineage reassignment target", moved & ~target.isin(set(all_labels) - set(own_labels)))
+    report("coarse label differs from reassignment target", moved & survivors["msp_ann_coarse"].ne(target))
+    report("non-reassigned cell has a foreign coarse label", ~moved & ~survivors["msp_ann_coarse"].isin(own_labels))
+    for col in required:
+        report(f"empty {col}", survivors[col].isna() | survivors[col].astype(str).str.strip().eq(""))
+    audit = reassigned.set_index("cell").reindex(survivors.index)
+    report("CSV target differs from H5AD", moved & audited & audit["reassign_to"].ne(target))
+    report("CSV fine label differs from H5AD", moved & audited & audit["fine_label"].ne(survivors["msp_ann_fine"]))
+    # Audit cluster IDs are pre-merge; msp_ann_cluster can contain a '+'-joined component.
+    cluster_matches = pd.Series([str(c) in str(merged).split("+") for c, merged in
+                                 zip(audit["cluster"], survivors["msp_ann_cluster"])], index=survivors.index)
+    report("CSV cluster is not in the H5AD merged cluster", moved & audited & ~cluster_matches)
+    if problems:
+        raise ValueError(f"lineage {name!r} has inconsistent annotation decisions:\n- " + "\n- ".join(problems))
+
+
+def merge_back(ad, plan, results, outdir, coarse_col="msp_ann_coarse", fine_col="msp_ann_fine", *, with_report=False):
     """results: {lineage_name: {"dir": path, "removed": df, "reassigned": df}}
     for every ZOOMED lineage (the lineage dir holds annotated.h5ad whose obs
     carries msp_ann_cluster/coarse/fine for the survivors)."""
@@ -88,6 +122,8 @@ def merge_back(ad, plan, results, outdir, coarse_col="msp_ann_coarse", fine_col=
             sub.file.close()
         expected = obs.index[coarse0.map(label_to_lineage).eq(name)]
         _validate_partition(name, expected, so, r["removed"], r["reassigned"])
+        own_labels = [lab for lab, owner in label_to_lineage.items() if owner == name]
+        _validate_annotation(name, so, r["reassigned"], own_labels, label_to_lineage)
         idx = so.index
         zcluster.loc[idx] = name + ":" + so.loc[idx, "msp_ann_cluster"].astype(str)
         zcoarse.loc[idx] = so.loc[idx, "msp_ann_coarse"].astype(str)
@@ -116,16 +152,29 @@ def merge_back(ad, plan, results, outdir, coarse_col="msp_ann_coarse", fine_col=
         columns=["cell", "lineage", "cluster", "preannotation", "annotate_remove", "remove_reason"])
     ra_all = pd.concat(ra_frames, ignore_index=True) if ra_frames else pd.DataFrame(
         columns=["cell", "lineage", "cluster", "reassign_to", "fine_label"])
-    rm_all.to_csv(os.path.join(outdir, "zmip_removed.csv"), index=False)
-    ra_all.to_csv(os.path.join(outdir, "zmip_reassigned.csv"), index=False)
-
     kept = ad[~removed].copy()
     for col in ("zmip_ann_coarse", "zmip_ann_fine", "zmip_lineage"):
         kept.obs[col] = kept.obs[col].cat.remove_unused_categories()
-    _figures(ad, kept, figdir)
-    tmp = os.path.join(outdir, "annotated_zmip.tmp.h5ad")
-    kept.write_h5ad(tmp)
-    os.replace(tmp, os.path.join(outdir, "annotated_zmip.h5ad"))
+    with publication.staging(outdir) as stage:
+        (stage / "figures").mkdir()
+        rm_all.to_csv(stage / "zmip_removed.csv", index=False)
+        ra_all.to_csv(stage / "zmip_reassigned.csv", index=False)
+        _figures(ad, kept, str(stage / "figures"))
+        kept.write_h5ad(stage / "annotated_zmip.h5ad")
+        # Reopen the actual bytes before replacing any public output.
+        disk = sc.read_h5ad(stage / "annotated_zmip.h5ad", backed="r")
+        try:
+            if not disk.obs_names.equals(kept.obs_names) or disk.shape != kept.shape:
+                raise ValueError("written global H5AD does not match the validated survivors")
+        finally:
+            disk.file.close()
+        if with_report:
+            from .report import generate_report
+
+            generate_report(outdir, out_html=str(stage / "report.html"), result_dir=str(stage))
+            if not (stage / "report.html").is_file():
+                raise ValueError("global report was not written")
+        publication.publish(outdir, stage)
     print(f"== merged: removed {int(removed.sum())}, reassigned {len(ra_all)}, "
           f"annotated_zmip.h5ad keeps {kept.n_obs}/{ad.n_obs}", flush=True)
     return kept, rm_all, ra_all

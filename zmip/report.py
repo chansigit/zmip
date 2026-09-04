@@ -26,6 +26,8 @@ import re
 from msp.plots import slug
 from msp.report import CSS, TOC_PIN_SCRIPT, _csv_table, _img
 
+from . import cache, publication
+
 _LABELS = {
     "plan": "Lineage plan",
     "lineages": "Lineages",
@@ -200,18 +202,21 @@ def _number(sections):
     return out, f'<nav class="toc">{"".join(toc)}</nav>'
 
 
-def generate_report(outdir, out_html=None, title=None):
+def generate_report(outdir, out_html=None, title=None, *, result_dir=None):
+    if result_dir is None:
+        publication.require_complete(outdir)
+    results = result_dir or outdir
     out_html = out_html or os.path.join(outdir, "report.html")
     plan_p = os.path.join(outdir, "zmip_plan.json")
     plan = None
     if os.path.exists(plan_p):
         with open(plan_p) as f:
             plan = json.load(f)
-    kept_counts = _rows(os.path.join(outdir, "zmip_fine_legend.csv"))
+    kept_counts = _rows(os.path.join(results, "zmip_fine_legend.csv"))
     sections = []
     if plan:
         sections += [_section_plan(outdir, plan), _section_lineages(outdir, plan)]
-    sections += [_section_final(outdir, kept_counts), _section_removed(outdir)]
+    sections += [_section_final(results, kept_counts), _section_removed(results)]
     sections, toc = _number([s for s in sections if s])
     from msp.report import compose_title
 
@@ -227,8 +232,12 @@ def generate_report(outdir, out_html=None, title=None):
     doc = ("<!DOCTYPE html><html><head><meta charset='utf-8'>"
            f"<title>{html.escape(title)}</title><style>{CSS}</style></head>"
            f"<body>{body}{TOC_PIN_SCRIPT}</body></html>")
-    with open(out_html, "w") as fh:
+    temporary = str(out_html) + ".tmp"
+    with open(temporary, "w") as fh:
         fh.write(doc)
+    os.replace(temporary, out_html)
+    if result_dir is None:
+        publication.refresh_report_receipt(outdir, out_html)
     return out_html
 
 
@@ -237,4 +246,6 @@ if __name__ == "__main__":
     ap.add_argument("outdir")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
-    print(f"wrote {generate_report(a.outdir, out_html=a.out)}")
+    with cache.lock_run(a.outdir):
+        publication.recover(a.outdir)
+        print(f"wrote {generate_report(a.outdir, out_html=a.out)}")

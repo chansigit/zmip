@@ -16,7 +16,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
-    "msp-sc>=0.2.0",   # PyPI name of msp (import name `msp`)
+    "msp-sc>=0.2.0,<0.3",   # private API compatibility is also checked at runtime
     "agent-harness-bridge[all]==0.1.0",
     "scanpy",
     "anndata",

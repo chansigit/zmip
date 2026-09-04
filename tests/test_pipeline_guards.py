@@ -5,6 +5,7 @@ import importlib
 import json
 import runpy
 import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -71,6 +72,70 @@ def test_merge_preserves_counts_audit_and_reassignment(merge_case, tmp_path):
     np.testing.assert_array_equal(disk.raw.X, original[["001", "NA"]].raw.X)
     pd.testing.assert_frame_equal(rm, removed)
     pd.testing.assert_frame_equal(ra, reassigned)
+
+
+@pytest.mark.parametrize("problem", ["missing_csv", "extra_csv", "target", "fine", "cluster",
+                                      "unknown_target", "same_lineage", "coarse"])
+def test_merge_rejects_inconsistent_reassignment_decisions(merge_case, tmp_path, problem):
+    ad, plan, survivors, removed, reassigned = merge_case
+    if problem == "missing_csv":
+        reassigned = reassigned.iloc[:0]
+    elif problem == "extra_csv":
+        del survivors["zmip_reassigned_to"]
+    elif problem in ("target", "fine", "cluster"):
+        column = {"target": "reassign_to", "fine": "fine_label", "cluster": "cluster"}[problem]
+        reassigned.loc[0, column] = "different"
+    elif problem == "coarse":
+        survivors["msp_ann_coarse"] = "A"
+    else:
+        target = "unknown" if problem == "unknown_target" else "A"
+        survivors["zmip_reassigned_to"] = target
+        survivors["msp_ann_coarse"] = target
+        reassigned["reassign_to"] = target
+    result = write_result(tmp_path / "A", survivors, removed, reassigned)
+    with pytest.raises(ValueError, match="inconsistent annotation decisions"):
+        merge.merge_back(ad, plan, {"A": result}, tmp_path)
+    assert not (tmp_path / "annotated_zmip.h5ad").exists()
+
+
+def test_merge_accepts_original_audit_cluster_in_merged_component(merge_case, tmp_path):
+    ad, plan, survivors, removed, reassigned = merge_case
+    survivors["msp_ann_cluster"] = "0+2"
+    result = write_result(tmp_path / "A", survivors, removed, reassigned)
+    kept, _, _ = merge.merge_back(ad, plan, {"A": result}, tmp_path)
+    assert kept.obs.loc["001", "zmip_cluster"] == "A:0+2"
+
+
+def test_plot_failure_does_not_replace_previous_global_outputs(merge_case, tmp_path, monkeypatch):
+    ad, plan, survivors, removed, reassigned = merge_case
+    result = write_result(tmp_path / "A", survivors, removed, reassigned)
+    names = ("annotated_zmip.h5ad", "zmip_removed.csv", "zmip_reassigned.csv", "report.html")
+    for name in names:
+        (tmp_path / name).write_bytes(b"old complete output")
+
+    def fail(*args):
+        raise RuntimeError("plot failed")
+
+    monkeypatch.setattr(merge, "_figures", fail)
+    with pytest.raises(RuntimeError, match="plot failed"):
+        merge.merge_back(ad, plan, {"A": result}, tmp_path)
+    assert all((tmp_path / name).read_bytes() == b"old complete output" for name in names)
+
+
+def test_report_failure_does_not_publish_new_data(merge_case, tmp_path, monkeypatch):
+    ad, plan, survivors, removed, reassigned = merge_case
+    result = write_result(tmp_path / "A", survivors, removed, reassigned)
+    names = ("annotated_zmip.h5ad", "zmip_removed.csv", "zmip_reassigned.csv", "report.html")
+    for name in names:
+        (tmp_path / name).write_bytes(b"old complete output")
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("report failed")
+
+    monkeypatch.setattr(importlib.import_module("zmip.report"), "generate_report", fail)
+    with pytest.raises(RuntimeError, match="report failed"):
+        merge.merge_back(ad, plan, {"A": result}, tmp_path, with_report=True)
+    assert all((tmp_path / name).read_bytes() == b"old complete output" for name in names)
 
 
 @pytest.mark.parametrize("problem", ["missing", "overlap", "duplicate_kept", "duplicate_removed",
@@ -234,7 +299,7 @@ def test_no_zoom_cli_skips_markers_and_preserves_output_contract(merge_case, tmp
 
     monkeypatch.setattr(plan_module, "plan_lineages", fake_plan)
     monkeypatch.setattr(foreign, "lineage_markers", lambda *a, **k: pytest.fail("markers are unnecessary"))
-    monkeypatch.setattr(importlib.import_module("zmip.report"), "generate_report", lambda *a: "report.html")
+    monkeypatch.setattr(importlib.import_module("zmip.report"), "generate_report", lambda *a, out_html=None, **k: Path(out_html).write_text("<html>test report</html>"))
     monkeypatch.setattr(sys, "argv", ["zmip", str(input_path), "--outdir", str(outdir)])
     runpy.run_module("zmip", run_name="__main__")
     output = sc.read_h5ad(outdir / "annotated_zmip.h5ad")

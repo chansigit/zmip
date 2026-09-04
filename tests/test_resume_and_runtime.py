@@ -328,7 +328,7 @@ def test_cli_resume_reruns_only_damaged_lineage_and_force_replans(tmp_path, monk
     monkeypatch.setattr(lineage, "save_single_umap", lambda *a, **k: None)
     monkeypatch.setattr(lineage, "annotate_lineage", fake_annotate)
     monkeypatch.setattr(merge, "_figures", lambda *a: None)
-    monkeypatch.setattr(report, "generate_report", lambda *a: "report.html")
+    monkeypatch.setattr(report, "generate_report", lambda *a, out_html=None, **k: Path(out_html).write_text("<html>test report</html>"))
     argv = ["zmip", str(source), "--outdir", str(root), "--min-cells", "1"]
 
     def run(force=False):

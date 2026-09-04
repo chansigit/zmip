@@ -8,6 +8,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from .runtime import runtime_identity
+
 
 @contextmanager
 def lock_run(outdir):
@@ -46,7 +48,7 @@ def prepare_run(outdir, input_path, options, force=False):
     """Reject unverifiable reuse; force starts a new generation before any work."""
     root = Path(outdir)
     root.mkdir(parents=True, exist_ok=True)
-    identity = {"input_sha256": file_digest(input_path), "options": options}
+    identity = {"input_sha256": file_digest(input_path), "options": options, "runtime": runtime_identity()}
     # Normalize tuples to JSON lists before comparing with a previous receipt.
     identity = json.loads(json.dumps(identity, sort_keys=True))
     path = root / ".zmip-run.json"
@@ -57,7 +59,8 @@ def prepare_run(outdir, input_path, options, force=False):
             except (ValueError, OSError) as exc:
                 raise ValueError("invalid resume record; use a new output directory or --force") from exc
             if not isinstance(previous, dict) or previous.get("identity") != identity or not previous.get("run_id"):
-                raise ValueError("input or options changed; use a new output directory or --force")
+                raise ValueError("input or options changed, or runtime/code changed; "
+                                 "use a new output directory or --force")
             return previous["run_id"]
         if any(root.glob("*.h5ad")) or (root / "zmip_plan.json").exists() or any(root.glob("*/annotated.h5ad")):
             raise ValueError("legacy outputs have no resume record; use a new output directory or --force")

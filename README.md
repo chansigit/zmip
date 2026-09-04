@@ -7,6 +7,9 @@ misassigned cells to the lineage they belong to. Same pattern as osp/msp —
 fixed computation, narrow agent decisions validated by the host, one
 self-contained report per lineage plus a global one.
 
+See [VALIDATION.md](VALIDATION.md) for the isolated installation checks and
+real-model workflow validation.
+
 ```
 msp annotated.h5ad ──▶ plan ──▶ per lineage: re-embed → foreign scores → agent ──▶ merge
                        (agent)                  (msp.integrate_adata)      (agent)     annotated_zmip.h5ad
@@ -15,9 +18,23 @@ msp annotated.h5ad ──▶ plan ──▶ per lineage: re-embed → foreign sc
 ## Install
 
 ```bash
-pip install msp-sc                                        # msp on PyPI (import name `msp`)
-pip install zmip                                          # includes agent-harness-bridge runtime extras
+./scripts/validate_install.sh /absolute/path/to/validation \
+    /path/to/msp /path/to/agent-harness-bridge /path/to/standissect-lite
 ```
+
+This development revision requires compatible source revisions of MSP and the
+shared harness. The configured package index does not currently supply
+`agent-harness-bridge[all]==0.1.0`; a bare `pip install zmip` therefore does not
+reproduce this revision. The script builds four non-editable wheels, creates a
+fresh CPython 3.12 environment, installs with `constraints-runtime.txt`, runs
+`pip check`, behavioral API checks and the tests outside the checkout. It
+records wheel hashes, resolved dependencies and the runtime identity. On older
+Linux systems, dependencies without compatible wheels may need source builds.
+For a source-built h5py, set `HDF5_DIR` to a supported HDF5 installation
+so its headers and shared library match. An MPI-enabled HDF5 also needs its
+matching MPI development headers. The validation records the loaded
+HDF5 and libc versions in `native-runtime.json`.
+Use the resulting `validation/env/bin/python` to run zmip.
 
 ## Usage
 
@@ -34,7 +51,9 @@ agent execution through MSP.
 
 Re-running resumes only verified results for the same input and options.
 Private `.zmip-*.json` receipts record an input SHA-256, options and stage
-file hashes; a lineage depends on the current plan and marker list and is
+file hashes. The identity also includes Python/dependency versions and source
+hashes for zmip, MSP, the harness and standissect-lite, including editable
+changes without a version bump. A lineage depends on the current plan and marker list and is
 complete only after its H5AD, proposal, report and both audit CSVs are written
 and its cell coverage is validated. Interrupted or modified results rerun.
 Input or option changes, and legacy directories without receipts, require a
@@ -118,6 +137,29 @@ cells exactly once; duplicates, missing cells, cells from other lineages,
 and reassignment records outside the survivors are rejected. Input cell
 identifiers must also be unique. Failed validation leaves global output
 files untouched.
+
+Reassignment records must match the H5AD cell set, destination coarse labels,
+fine labels and original cluster membership (including merged clusters).
+Unknown destinations, same-lineage moves and unrecorded foreign labels are
+rejected before publication.
+
+Global CSVs, figures, H5AD and the report are built in a private staging
+directory and the H5AD is reopened before publication. `.zmip-publish.json`
+guards the multi-file replacement window; `.zmip-global.json` is written last.
+On failure or the next run after a hard interruption, the host restores the
+previous set from private backups. Report rebuilding refuses incomplete,
+modified or stale data. Public filenames and file schemas remain unchanged.
+External readers should hold `zmip.cache.lock_run(outdir)`, then require
+`zmip.publication.complete(outdir)` while opening the global output; independent
+files cannot all be replaced by one filesystem operation. These checks cover process interruption, not storage
+hardware failure or unsynchronized external writers.
+
+For a small real-data validation run, independently check cell coverage,
+original annotations, expression and counts with:
+
+```bash
+python scripts/check_result.py input.h5ad zmip_out --json validation.json
+```
 
 DEG references retain the string API: `5,1` selects that exact current
 subcluster; use CSV quoting for a pool such as `"5,0","5,1"`. Ambiguous

@@ -27,7 +27,10 @@ import scanpy as sc
 from harness_bridge import resolve_agent_config
 from msp.report import write_report_context
 
-from . import cache
+from . import cache, publication
+from .runtime import check_runtime
+
+check_runtime()
 from .cli import add_integration_options, parse_harmony
 from .foreign import MARKER_COLUMNS, lineage_markers
 from .lineage import (
@@ -41,7 +44,6 @@ from .lineage import (
 )
 from .merge import merge_back
 from .plan import DEFAULT_MIN_CELLS, plan_lineages
-from .report import generate_report
 
 parser = argparse.ArgumentParser(prog="zmip", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -73,6 +75,7 @@ except ValueError as exc:
 
 out = os.path.abspath(args.outdir)
 with cache.lock_run(out):
+    publication.recover(out)
     # Check the on-disk input before loading or modifying any scientific outputs.
     options = {k: v for k, v in vars(args).items() if k not in {"h5ad", "outdir", "force", "report_context"}}
     options["harness"] = agent_config.harness
@@ -162,5 +165,5 @@ with cache.lock_run(out):
         results.update(run_lineages_parallel(ad, todo, all_labels, out, child_args,
                                              coarse_col=args.coarse_col, fine_col=args.fine_col))
 
-    merge_back(ad, plan, results, out, coarse_col=args.coarse_col, fine_col=args.fine_col)
-    print(f"== report: {generate_report(out)}", flush=True)
+    merge_back(ad, plan, results, out, coarse_col=args.coarse_col, fine_col=args.fine_col, with_report=True)
+    print(f"== report: {os.path.join(out, 'report.html')}", flush=True)

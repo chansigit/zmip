@@ -139,12 +139,13 @@ def run_lineage(sub, name, labels, all_labels, markers, outdir, *, batch_col, sp
         species=species, language=language, model=model, effort=effort, max_turns=max_turns,
     )
     # Validate the files that resume will read, not only the in-memory tables.
-    from .merge import _validate_partition
+    from .merge import _validate_annotation, _validate_partition
 
     result = load_result(d)
     kept = sc.read_h5ad(os.path.join(d, "annotated.h5ad"), backed="r")
     try:
         _validate_partition(name, expected, kept.obs, result["removed"], result["reassigned"])
+        _validate_annotation(name, kept.obs, result["reassigned"], labels, all_labels)
     finally:
         kept.file.close()
     cache.seal(d, "complete", generation, CONTRACT_FILES)

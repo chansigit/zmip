@@ -1,0 +1,22 @@
+# Reproducible CPython 3.12 scientific stack used by the installation check.
+# Local source wheels for MSP, harness_bridge and standissect-lite are supplied separately.
+numpy==2.3.4
+scipy==1.16.3
+pandas==2.3.3
+scanpy==1.11.5
+anndata==0.13.2
+h5py==3.15.1
+numba==0.65.0
+scikit-learn==1.8.0
+igraph==0.11.9
+leidenalg==0.10.2
+harmonypy==0.2.0
+torch==2.6.0
+pillow==11.3.0
+statsmodels==0.14.6
+matplotlib==3.10.8
+seaborn==0.13.2
+openai==3.8.0
+openai-agents==0.22.0
+mcp==1.27.0
+claude-agent-sdk==0.2.152
