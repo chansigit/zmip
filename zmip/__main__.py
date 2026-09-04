@@ -99,8 +99,13 @@ for ln in plan["lineages"]:
     print(f"== lineage {ln['name']}: {ln['coarse_labels']} n={ln['n_cells']} zoom={ln['zoom']}", flush=True)
 
 markers_p = os.path.join(out, "lineage_markers.csv")
+mk = None
 if os.path.exists(markers_p) and not args.force:
-    mk = pd.read_csv(markers_p)
+    try:
+        mk = pd.read_csv(markers_p)
+    except pd.errors.EmptyDataError:  # a half-written/empty file from an interrupted run: recompute
+        mk = None
+if mk is not None:
     markers = {g: mk.loc[mk["lineage"] == g, "gene"].tolist() for g in mk["lineage"].unique()}
 else:
     print("== lineage-level markers (for foreign-lineage scores)", flush=True)

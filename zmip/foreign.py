@@ -44,8 +44,14 @@ def lineage_markers(ad, lineage_col, outdir, top_n=TOP_N):
         for rank, r in enumerate(df.itertuples(index=False), 1):
             rows.append({"lineage": g, "rank": rank, "gene": r.names, "logFC": float(r.logfoldchanges),
                          "pct_in": float(r.pct_in), "pct_out": float(r.pct_out)})
-    out = pd.DataFrame(rows)
+    # explicit columns: a run where no gene passes the pct_out filter for any
+    # lineage (tiny/synthetic data, or one lineage swamping the rest) must
+    # still yield an empty-but-well-formed table, not a KeyError below
+    out = pd.DataFrame(rows, columns=["lineage", "rank", "gene", "logFC", "pct_in", "pct_out"])
     out.to_csv(os.path.join(outdir, "lineage_markers.csv"), index=False)
+    for g in groups:
+        if not (out["lineage"] == g).any():
+            print(f"== no lineage markers pass pct_out<{MAX_PCT_OUT} for {g!r} — no foreign score for it", flush=True)
     del tmp.uns["rank_genes_groups"]
     return {g: out.loc[out["lineage"] == g, "gene"].tolist() for g in groups}
 

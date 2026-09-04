@@ -44,8 +44,8 @@ from msp.inspect import (
     _cluster_order, _deg_table, _file_inventory, _gene_table, _load_removal_mask,
     _stability_table, _subcluster_once,
 )
+from msp.harness import default_model
 from msp.report import generate_report
-from msp.agent_util import run_query
 
 REMOVE_BUDGET = 0.10  # agent-removed share of a lineage above which finalize asks for a second look
 
@@ -313,8 +313,7 @@ markers and low doublet evidence; mixed profiles are doublets, not reassignments
 
 async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_col, species, prior_cols,
                      paga, pre_removed, foreign_cols, other_keys, language, model, effort, max_turns):
-    from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ResultMessage, ToolUseBlock,
-                                  create_sdk_mcp_server, tool)
+    from msp.harness import AgentIncompleteError, ToolSpec, run_agent
 
     state = {"key": BASE_KEY, "n_sub": 0}
     entries, holder = {}, {}
@@ -322,25 +321,17 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
     def current():
         return _cluster_order(ad.obs[state["key"]].astype(str))
 
-    @tool("cluster_context", "Non-expression context for one current cluster: size, removal share, r1.0 "
-          "parent + siblings, PAGA neighbours, samples, QC medians, foreign-lineage scores, previous-round "
-          "labels, prior label compositions.", {"cluster": str})
     async def cluster_context(args):
         return {"content": [{"type": "text", "text": _context(
             ad, state["key"], str(args["cluster"]), batch_col, prior_cols, paga, pre_removed, foreign_cols,
             lineage_labels)}]}
 
-    @tool("check_genes", "Per-cluster mean expression and expressing-cell fraction for the given genes "
-          "(case-insensitive), on the current clustering.", {"genes": list})
     async def check_genes(args):
         genes = args["genes"]
         if isinstance(genes, str):
             genes = [g for g in genes.replace(",", " ").split() if g]
         return {"content": [{"type": "text", "text": _gene_table(ad, genes, state["key"])}]}
 
-    @tool("check_deg", "On-demand wilcoxon DEG for one current cluster. reference='rest' (default) or a "
-          "comma-separated list of other current cluster ids (e.g. its siblings). Cells already slated for "
-          "removal are excluded.", {"cluster": str, "reference": str, "top_n": int})
     async def check_deg(args):
         c = str(args["cluster"])
         cur = current()
@@ -355,16 +346,11 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
         return {"content": [{"type": "text", "text": _deg_table(
             ad, state["key"], c, reference, int(args.get("top_n") or 20), pre_removed)}]}
 
-    @tool("check_stability", "How one current cluster decomposes across the other leiden resolutions "
-          "of this subset (r0.3/r1.0/r2.0).", {"cluster": str})
     async def check_stability(args):
         return {"content": [{"type": "text",
                              "text": _stability_table(ad, str(args["cluster"]), state["key"],
                                                       [k for k in other_keys if k != state["key"]])}]}
 
-    @tool("subcluster", "Split one heterogeneous current cluster with leiden restrict_to at the given "
-          'resolution (0.3-1.0 typical). New ids look like "5,0"; tools and submissions follow the refined '
-          "clustering; the parent's submission (if any) is discarded.", {"cluster": str, "resolution": float})
     async def subcluster(args):
         c = str(args["cluster"])
         if c not in current():
@@ -381,8 +367,6 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
             text += "\n(working clustering refined; all tools and submissions now use the new ids)"
         return {"content": [{"type": "text", "text": text}]}
 
-    @tool("submit_cluster", "Submit (or resubmit — last wins) ONE current cluster. cluster_json schema:\n"
-          + _CLUSTER_SCHEMA_DOC, {"cluster_json": str})
     async def submit_cluster(args):
         try:
             e = json.loads(args["cluster_json"])
@@ -405,8 +389,6 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
         return {"content": [{"type": "text", "text": f"recorded {e['cluster_id']}; {len(entries)}/{len(cur)} "
                              + (f"submitted, remaining: {left}" if left else "submitted — call finalize_annotation")}]}
 
-    @tool("finalize_annotation", "Validate everything together and finish. overall = short assessment "
-          "of this lineage.", {"overall": str})
     async def finalize_annotation(args):
         cur = current()
         problems = _validate_final(entries, cur)
@@ -445,46 +427,45 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
                   f"{100 * REMOVE_BUDGET:.0f}%) — reaffirmed, recorded as budget_exceeded", flush=True)
         with open(os.path.join(outdir, "annotation_proposal.json"), "w") as fh:
             json.dump(holder["proposal"], fh, ensure_ascii=False, indent=2)
-        return {"content": [{"type": "text", "text": "accepted"}]}
+        return {"content": [{"type": "text", "text": "accepted"}], "_submitted": holder["proposal"]}
 
-    server = create_sdk_mcp_server(name="zmip", version="1.0.0",
-                                   tools=[cluster_context, check_genes, check_deg, check_stability,
-                                          subcluster, submit_cluster, finalize_annotation])
-    options = ClaudeAgentOptions(
-        mcp_servers={"zmip": server},
-        allowed_tools=["Read", "Glob", "Grep", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet",
-                       "mcp__zmip__cluster_context", "mcp__zmip__check_genes", "mcp__zmip__check_deg",
-                       "mcp__zmip__check_stability", "mcp__zmip__subcluster", "mcp__zmip__submit_cluster",
-                       "mcp__zmip__finalize_annotation"],
-        permission_mode="bypassPermissions",
-        disallowed_tools=["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch"],
-        max_buffer_size=50_000_000,
-        system_prompt=_system_prompt(outdir, lineage, lineage_labels, other_labels, current(), batch_col,
-                                     species, prior_cols, foreign_cols, language),
-        cwd=os.path.abspath(outdir),
-        max_turns=max_turns,
-        **({"model": model} if model else {}),
-        **({"effort": effort} if effort else {}),
-    )
-    result_text = None
-    async for message in run_query(f"Zoom-in annotate lineage {lineage!r}: one Task per base cluster, "
-                                   "submit_cluster each, then finalize_annotation.", options, label=f"zmip {lineage}"):
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, ToolUseBlock):
-                    print(f"== [{lineage}] agent: {block.name}({str(next(iter(block.input.values()), ''))[:80]})",
-                          flush=True)
-        elif isinstance(message, ResultMessage):
-            result_text = message.result
-            if message.total_cost_usd:
-                print(f"== [{lineage}] agent cost: ${message.total_cost_usd:.2f}", flush=True)
-    if "proposal" not in holder:
-        raise RuntimeError(f"[{lineage}] agent finished without finalize_annotation "
-                           f"({len(entries)} submitted). Final reply:\n{result_text}")
-    if result_text:
+    tools = [
+        ToolSpec("cluster_context", "Non-expression context for one current cluster: size, removal share, r1.0 "
+                 "parent + siblings, PAGA neighbours, samples, QC medians, foreign-lineage scores, previous-round "
+                 "labels, prior label compositions.", {"cluster": str}, cluster_context),
+        ToolSpec("check_genes", "Per-cluster mean expression and expressing-cell fraction for the given genes "
+                 "(case-insensitive), on the current clustering.", {"genes": list}, check_genes),
+        ToolSpec("check_deg", "On-demand wilcoxon DEG for one current cluster. reference='rest' (default) or a "
+                 "comma-separated list of other current cluster ids (e.g. its siblings). Cells already slated for "
+                 "removal are excluded.", {"cluster": str, "reference": str, "top_n": int}, check_deg),
+        ToolSpec("check_stability", "How one current cluster decomposes across the other leiden resolutions "
+                 "of this subset (r0.3/r1.0/r2.0).", {"cluster": str}, check_stability),
+        ToolSpec("subcluster", "Split one heterogeneous current cluster with leiden restrict_to at the given "
+                 'resolution (0.3-1.0 typical). New ids look like "5,0"; tools and submissions follow the refined '
+                 "clustering; the parent's submission (if any) is discarded.", {"cluster": str, "resolution": float},
+                 subcluster),
+        ToolSpec("submit_cluster", "Submit (or resubmit — last wins) ONE current cluster. cluster_json schema:\n"
+                 + _CLUSTER_SCHEMA_DOC, {"cluster_json": str}, submit_cluster),
+        ToolSpec("finalize_annotation", "Validate everything together and finish. overall = short assessment "
+                 "of this lineage.", {"overall": str}, finalize_annotation),
+    ]
+    try:
+        result = await run_agent(
+            tools=tools, submit_tool="finalize_annotation",
+            prompt=f"Zoom-in annotate lineage {lineage!r}: one Task per base cluster, submit_cluster each, "
+                   "then finalize_annotation.",
+            system_prompt=_system_prompt(outdir, lineage, lineage_labels, other_labels, current(), batch_col,
+                                         species, prior_cols, foreign_cols, language),
+            cwd=os.path.abspath(outdir), model=model, effort=effort, max_turns=max_turns,
+            allowed_builtin=("read", "glob", "grep", "tasks"), label=f"zmip {lineage}",
+            max_buffer_size=50_000_000,
+        )
+    except AgentIncompleteError as e:
+        raise RuntimeError(f"{e} ({len(entries)} submitted)") from None
+    if result.transcript_text:
         with open(os.path.join(outdir, "annotation_notes.md"), "w") as fh:
-            fh.write(result_text)
-    return holder["proposal"]
+            fh.write(result.transcript_text)
+    return result.submitted
 
 
 # ---------------------------------------------------------------- entry
@@ -503,7 +484,7 @@ def annotate_lineage(ad, outdir, lineage, lineage_labels, other_labels, foreign_
           f"prior cols {prior_cols}; foreign {foreign_cols}", flush=True)
     proposal = asyncio.run(_run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_col, species,
                                       prior_cols, paga, pre_removed, foreign_cols, other_keys, language,
-                                      model, effort, max_turns))
+                                      model or default_model(), effort, max_turns))
     removed, reassigned = _apply(ad, proposal["cluster_key"], proposal, pre_removed, lineage)
     removed.to_csv(os.path.join(outdir, "annotation_removed.csv"), index=False)
     reassigned.to_csv(os.path.join(outdir, "annotation_reassigned.csv"), index=False)
