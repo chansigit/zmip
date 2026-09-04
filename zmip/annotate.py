@@ -41,7 +41,7 @@ from msp.annotate import (
     _plot, _prior_label_columns,
 )
 from msp.inspect import (
-    _cluster_order, _deg_table, _file_inventory, _gene_table, _load_removal_mask,
+    DegCache, _cluster_order, _file_inventory, _gene_table, _load_removal_mask,
     _stability_table, _subcluster_once,
 )
 from msp.harness import default_model
@@ -317,6 +317,7 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
 
     state = {"key": BASE_KEY, "n_sub": 0}
     entries, holder = {}, {}
+    deg = DegCache(ad, outdir, pre_removed, label=f"zmip {lineage}")
 
     def current():
         return _cluster_order(ad.obs[state["key"]].astype(str))
@@ -343,8 +344,7 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
             if unknown:
                 return {"content": [{"type": "text", "text": f"unknown reference cluster(s) {unknown}; current: {cur}"}],
                         "is_error": True}
-        return {"content": [{"type": "text", "text": _deg_table(
-            ad, state["key"], c, reference, int(args.get("top_n") or 20), pre_removed)}]}
+        return {"content": [{"type": "text", "text": deg.table(state["key"], c, reference, int(args.get("top_n") or 20))}]}
 
     async def check_stability(args):
         return {"content": [{"type": "text",
