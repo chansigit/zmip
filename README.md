@@ -45,9 +45,14 @@ when data quality fuses them (T/B/myeloid as one immune island) — and keeps
 separate islands separate even when related; states (proliferating,
 stressed) go with the island they sit in. Host rules: every coarse label
 assigned exactly once; zoom only for lineages with at least `--min-cells`
-(default 800 — below that leiden cannot resolve stable substates); archived
-to `zmip_plan.json`. One lineage or none above the threshold → nothing is
-zoomed and the msp labels pass through.
+(default 800 — below that leiden cannot resolve stable substates); the
+plan must agree with the host's own islands (`lineage_islands.csv`:
+connected components of the 2-D UMAP kNN graph, long edges pruned, as % of
+each label's cells) — pooling labels that sit on separate islands is
+rejected outright, splitting labels that share one island is pushed back
+once and accepted on resubmission with `confirm_shared_islands: true`
+(recorded as `host_warnings`); archived to `zmip_plan.json`. One lineage or
+none above the threshold → nothing is zoomed and the msp labels pass through.
 
 ### 2. per lineage (`zmip.foreign`, `msp.integrate_adata`, `zmip.annotate`)
 

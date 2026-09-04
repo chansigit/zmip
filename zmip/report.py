@@ -68,7 +68,10 @@ def _section_plan(outdir, plan):
                      ("lineage", "coarse_labels", "n_cells", "zoom", "reason")), "</div>"]
     if plan.get("notes"):
         parts.append(f"<p><b>Agent reading of the UMAP:</b> {html.escape(plan['notes'])}</p>")
+    for w in plan.get("host_warnings", []):
+        parts.append(f"<p><b>Host warning (confirmed by the agent):</b> {html.escape(w)}</p>")
     for name, label in (("lineage_counts.csv", "Cells per coarse label"),
+                        ("lineage_islands.csv", "UMAP islands (host-computed; % of each label's cells)"),
                         ("lineage_knn.csv", "kNN cross-connectivity (% of edges)"),
                         ("lineage_paga.csv", "PAGA connectivity")):
         p = os.path.join(outdir, name)
