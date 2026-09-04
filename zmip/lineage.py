@@ -37,18 +37,24 @@ import pandas as pd
 import scanpy as sc
 
 from msp.integrate import integrate_adata
-from msp.plots import save_single_umap, slug
+from msp.plots import save_single_umap
 from msp.resources import available_cpus, available_memory_bytes, current_rss_bytes
 
 from .annotate import PREV_SUFFIX, PREVIOUS_COLS, annotate_lineage
 from .foreign import score_foreign
+from .plan import _lineage_slugs
 
 SUBSET_FILE = "subset.h5ad"  # the parent's hand-off to a lineage subprocess; removed once loaded
 FIXED_BYTES_PER_PROCESS = 512 << 20
 
 
 def lineage_dir(outdir, name):
-    return os.path.join(outdir, slug(name))
+    directory = os.path.join(outdir, _lineage_slugs([name])[name])
+    root = os.path.realpath(outdir)
+    resolved = os.path.realpath(directory)
+    if resolved == root or os.path.commonpath([root, resolved]) != root:
+        raise ValueError(f"lineage directory escapes output directory: {directory!r}")
+    return directory
 
 
 def contract_done(d):
@@ -56,8 +62,11 @@ def contract_done(d):
 
 
 def load_result(d):
-    return {"dir": d, "removed": pd.read_csv(os.path.join(d, "annotation_removed.csv")),
-            "reassigned": pd.read_csv(os.path.join(d, "annotation_reassigned.csv"))}
+    # Converters preserve leading zeros and literal NA-like identifiers;
+    # pandas still infers the removal flags as booleans.
+    text_columns = dict.fromkeys(("cell", "lineage", "cluster", "reassign_to", "fine_label"), str)
+    return {"dir": d, "removed": pd.read_csv(os.path.join(d, "annotation_removed.csv"), converters=text_columns),
+            "reassigned": pd.read_csv(os.path.join(d, "annotation_reassigned.csv"), converters=text_columns)}
 
 
 def subset_for(ad, labels, coarse_col, fine_col):
@@ -90,9 +99,10 @@ def run_lineage(sub, name, labels, all_labels, markers, outdir, *, batch_col, sp
         n = sub.obs[col].nunique()
         save_single_umap(sub, col, os.path.join(figdir, f"umap_{col}.png"), repel=True,
                          repel_fontsize=8 if n > 15 else 11, figsize=(9, 9) if n > 15 else None)
-    proposal, rm, ra = annotate_lineage(sub, d, name, labels, sorted(set(all_labels) - set(labels)), foreign_cols,
-                                        species=species, language=language, model=model, effort=effort,
-                                        max_turns=max_turns)
+    _, rm, ra = annotate_lineage(
+        sub, d, name, labels, sorted(set(all_labels) - set(labels)), foreign_cols,
+        species=species, language=language, model=model, effort=effort, max_turns=max_turns,
+    )
     return {"dir": d, "removed": rm, "reassigned": ra}
 
 

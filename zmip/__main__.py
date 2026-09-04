@@ -12,9 +12,9 @@
             zmip_removed.csv, zmip_reassigned.csv, report.html
 
 Re-running resumes: the plan is reused, lineages whose contract files exist
-are skipped; --force redoes everything. One lineage (or none above the
-threshold) → nothing is zoomed and annotated_zmip.h5ad carries the msp
-labels unchanged.
+are skipped; --force reruns markers and lineages (the recorded plan is
+reused). If no lineage is selected for zoom, annotated_zmip.h5ad carries
+the msp labels unchanged.
 """
 
 import argparse
@@ -23,8 +23,6 @@ import sys
 
 import pandas as pd
 import scanpy as sc
-
-from msp.plots import slug
 
 from .foreign import lineage_markers
 from .lineage import contract_done, lineage_dir, load_result, run_lineage, run_lineages_parallel, subset_for

@@ -34,7 +34,8 @@ agent execution through MSP.
 
 Re-running resumes: the plan is reused, lineages whose contract files
 (`annotation_proposal.json`, `annotated.h5ad`, `report.html`) exist are
-skipped; `--force` redoes everything. Integration knobs (`--resolutions`,
+skipped; `--force` reruns markers and lineages but reuses the recorded plan.
+Integration knobs (`--resolutions`,
 `--n-top-genes`, `--n-pcs`, `--n-neighbors`, `--harmony KEY=VALUE`) are the
 same as msp's and apply to every per-lineage re-embedding.
 
@@ -57,8 +58,8 @@ connected components of the 2-D UMAP kNN graph, long edges pruned, as % of
 each label's cells) — pooling labels that sit on separate islands is
 rejected outright, splitting labels that share one island is pushed back
 once and accepted on resubmission with `confirm_shared_islands: true`
-(recorded as `host_warnings`); archived to `zmip_plan.json`. One lineage or
-none above the threshold → nothing is zoomed and the msp labels pass through.
+(recorded as `host_warnings`); archived to `zmip_plan.json`. If no lineage is
+selected for zoom, the msp labels pass through unchanged.
 
 ### 2. per lineage (`zmip.foreign`, `msp.integrate_adata`, `zmip.annotate`)
 

@@ -103,9 +103,11 @@ def _figures(ad, kept, figdir):
               .reset_index().sort_values(["zmip_ann_coarse", "n_cells"], ascending=[True, False]))
     legend.insert(0, "id", range(1, len(legend) + 1))
     legend.to_csv(os.path.join(os.path.dirname(figdir), "zmip_fine_legend.csv"), index=False)
-    id_of = dict(zip(legend["zmip_ann_fine"], legend["id"].astype(str)))
-    kept.obs["_fine_id"] = pd.Categorical(kept.obs["zmip_ann_fine"].astype(str).map(id_of),
-                                          categories=legend["id"].astype(str).tolist())
+    # Fine names may repeat across independently annotated lineages.
+    label_cols = ["zmip_ann_coarse", "zmip_ann_fine"]
+    id_of = dict(zip(legend[label_cols].itertuples(index=False, name=None), legend["id"].astype(str)))
+    fine_ids = [id_of[pair] for pair in kept.obs[label_cols].itertuples(index=False, name=None)]
+    kept.obs["_fine_id"] = pd.Categorical(fine_ids, categories=legend["id"].astype(str).tolist())
     pal = _palette(kept, "zmip_ann_fine")
     if pal:  # same colour per fine label as its id
         by_fine = dict(zip(kept.obs["zmip_ann_fine"].cat.categories, pal))

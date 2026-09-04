@@ -34,7 +34,6 @@ import os
 
 import numpy as np
 import pandas as pd
-import scanpy as sc
 
 from msp.annotate import (
     BASE_KEY, CONFIDENCES, PARENT_KEY, REMOVE_REASONS, _components, _load_paga_neighbors,
@@ -134,6 +133,8 @@ _CLUSTER_SCHEMA_DOC = """{
 
 
 def _validate_cluster(e, clusters, lineage_labels, other_labels):
+    if not isinstance(e, dict):
+        return ["cluster submission must be a JSON object"]
     problems = []
     for k in ("cluster_id", "coarse_label", "fine_label", "merge_target", "action", "confidence",
               "evidence", "rationale"):
@@ -144,7 +145,7 @@ def _validate_cluster(e, clusters, lineage_labels, other_labels):
     cid = str(e["cluster_id"])
     if cid not in clusters:
         problems.append(f"cluster_id {cid!r} is not a current cluster; current: {clusters}")
-    for k in ("coarse_label", "fine_label"):
+    for k in ("coarse_label", "fine_label", "rationale"):
         if not isinstance(e[k], str) or not e[k].strip():
             problems.append(f"{k} must be a non-empty string")
     act = e["action"]
@@ -158,7 +159,7 @@ def _validate_cluster(e, clusters, lineage_labels, other_labels):
         problems.append(f"remove requires remove_reason in {REMOVE_REASONS}")
     elif act == "reassign":
         tgt = e.get("reassign_to")
-        if tgt not in other_labels:
+        if not isinstance(tgt, str) or tgt not in other_labels:
             problems.append(f"reassign_to must be a coarse label of another lineage {sorted(other_labels)}; got {tgt!r}")
         elif str(e["coarse_label"]).strip() != tgt:
             problems.append(f"for reassign, coarse_label must equal reassign_to ({tgt!r})")
@@ -174,6 +175,10 @@ def _validate_cluster(e, clusters, lineage_labels, other_labels):
     ev = e["evidence"]
     if not isinstance(ev, dict) or not all(k in ev for k in ("distinctness", "markers", "foreign", "merge")):
         problems.append("evidence must be an object with distinctness / markers / foreign / merge")
+    else:
+        for k in ("distinctness", "markers", "foreign", "merge"):
+            if not isinstance(ev[k], str) or not ev[k].strip():
+                problems.append(f"evidence.{k} must be a non-empty string")
     return problems
 
 
@@ -191,11 +196,17 @@ def _validate_final(entries, clusters):
         mt = e.get("merge_target")
         if mt is None:
             continue
+        if str(mt) not in entries:
+            problems.append(f"cluster {c}: merge_target {mt!r} is no longer a current cluster "
+                            "— resubmit this cluster with a current target or null")
+            continue
         tgt = entries[str(mt)]
         if tgt["action"] != e["action"] or tgt.get("reassign_to") != e.get("reassign_to"):
             problems.append(f"cluster {c} ({e['action']}) merges into {mt} ({tgt['action']}"
                             f"{', → ' + str(tgt.get('reassign_to')) if tgt.get('reassign_to') else ''}) — "
                             "merged clusters must share the same action (and reassign target)")
+    if problems:
+        return problems
     comp = _components(entries)
     seen = set()
     for c, members in comp.items():

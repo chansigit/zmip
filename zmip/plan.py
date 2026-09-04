@@ -13,7 +13,7 @@ Evidence (all deterministic, written to outdir before the agent runs):
                             as % of each coarse label's cells per island
   - figures/umap_<coarse>.png  the coarse-label UMAP the agent MUST look at
 
-The agent (claude-agent-sdk) pools coarse labels that form ONE connected
+The agent (via harness_bridge) pools coarse labels that form ONE connected
 island on the UMAP into a lineage and keeps separate islands separate —
 even when they are related lineages — because zoom-in re-embeds each
 lineage on its own and a disconnected island dragged in becomes a
@@ -48,6 +48,21 @@ ISLAND_EDGE_FACTOR = 4.0  # prune edges longer than this × the median k-th-neig
 ISLAND_MIN_FRAC = 0.002  # components smaller than max(20, this × n_obs) are noise (island 0)
 HOME_FRAC = 0.30         # an island holding ≥ this share of a label's cells is a home island of the label
 
+
+def _lineage_slugs(names):
+    """Keep existing directory names, rejecting unsafe or ambiguous mappings."""
+    result, owners = {}, {}
+    for name in names:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("lineage name must be a non-empty string")
+        directory = slug(name)
+        if directory in (".", "..", "figures"):
+            raise ValueError(f"lineage name {name!r} maps to reserved directory {directory!r}")
+        if directory in owners:
+            raise ValueError(f"lineage names {owners[directory]!r} and {name!r} share directory {directory!r}")
+        owners[directory] = name
+        result[name] = directory
+    return result
 
 def umap_islands(ad, coarse_col, outdir):
     """Connected components of the UMAP kNN graph (k=ISLAND_K, edges longer
@@ -147,8 +162,7 @@ def island_problems(lineages, islands):
 
 
 def lineage_evidence(ad, coarse_col, batch_col, outdir):
-    """Write the three evidence tables + the coarse UMAP; return (counts_df,
-    knn_df, paga_df) for the prompt."""
+    """Write evidence and the coarse UMAP; return counts, kNN, PAGA and islands."""
     figdir = os.path.join(outdir, "figures")
     os.makedirs(figdir, exist_ok=True)
     lab = ad.obs[coarse_col].astype(str)
@@ -202,12 +216,22 @@ def validate_plan(plan, labels, counts, min_cells, islands=None):
     island is rejected once, accepted when the plan carries
     confirm_shared_islands: true (recorded under host_warnings)."""
     problems = []
+    if not isinstance(plan, dict):
+        return ["plan must be a JSON object"], None
+    if not isinstance(plan.get("confirm_shared_islands", False), bool):
+        problems.append("confirm_shared_islands must be a boolean")
     lineages = plan.get("lineages")
     if not isinstance(lineages, list) or not lineages:
         return ['"lineages" must be a non-empty list'], None
     seen_labels, seen_names, out = {}, set(), []
     for ln in lineages:
-        name = str(ln.get("name", "")).strip()
+        if not isinstance(ln, dict):
+            problems.append("each lineage must be a JSON object")
+            continue
+        if not isinstance(ln.get("name"), str):
+            problems.append("lineage name must be a non-empty string")
+            continue
+        name = ln["name"].strip()
         members = ln.get("coarse_labels")
         if not name:
             problems.append(f"lineage without a name: {ln}")
@@ -218,6 +242,12 @@ def validate_plan(plan, labels, counts, min_cells, islands=None):
         if not isinstance(members, list) or not members:
             problems.append(f"lineage {name!r}: coarse_labels must be a non-empty list")
             continue
+        if not all(isinstance(m, str) for m in members):
+            problems.append(f"lineage {name!r}: coarse_labels must contain strings only")
+            continue
+        if not isinstance(ln.get("zoom", True), bool):
+            problems.append(f"lineage {name!r}: zoom must be a boolean")
+            continue
         for m in members:
             if m not in labels:
                 problems.append(f"lineage {name!r}: {m!r} is not a coarse label; labels: {labels}")
@@ -225,7 +255,7 @@ def validate_plan(plan, labels, counts, min_cells, islands=None):
                 problems.append(f"coarse label {m!r} assigned to both {seen_labels[m]!r} and {name!r}")
             seen_labels[m] = name
         n = int(sum(counts.loc[m, "n_cells"] for m in members if m in counts.index))
-        zoom = bool(ln.get("zoom", True))
+        zoom = ln.get("zoom", True)
         forced = ""
         if zoom and n < min_cells:
             zoom, forced = False, f" (host: {n} < min_cells={min_cells}, zoom disabled)"
@@ -236,9 +266,13 @@ def validate_plan(plan, labels, counts, min_cells, islands=None):
         problems.append(f"coarse labels not assigned to any lineage: {missing}")
     if problems:
         return problems, None
+    try:
+        _lineage_slugs(ln["name"] for ln in out)
+    except ValueError as exc:
+        return [str(exc)], None
     hard, soft = island_problems(out, islands)
     problems += hard
-    if soft and not bool(plan.get("confirm_shared_islands", False)):
+    if soft and not plan.get("confirm_shared_islands", False):
         problems += [f"{w} — labels on one island belong to one lineage unless the picture shows a real gap; "
                      f"either merge them or resubmit unchanged with \"confirm_shared_islands\": true" for w in soft]
     if problems:
@@ -305,7 +339,7 @@ Finish by calling submit_plan with JSON of this schema:
 If validation fails, fix the named problems and call it again."""
 
 
-async def _run(ad, coarse_col, labels, counts, knn, paga, islands, outdir, min_cells, species, model, effort):
+async def _run(coarse_col, labels, counts, knn, paga, islands, outdir, min_cells, species, model, effort):
     from harness_bridge import ToolSpec, run_agent
 
     async def submit_plan(args):
@@ -349,10 +383,12 @@ def plan_lineages(ad, coarse_col, batch_col, outdir, min_cells=DEFAULT_MIN_CELLS
     if os.path.exists(path):
         with open(path) as f:
             plan = json.load(f)
+        # Archived names must obey the same directory rules as new submissions.
+        _lineage_slugs(ln["name"] for ln in plan["lineages"])
         print(f"== reusing recorded plan {path}", flush=True)
         return plan
     labels = list(counts.index)
-    plan = asyncio.run(_run(ad, coarse_col, labels, counts, knn, paga, islands, outdir, min_cells, species,
+    plan = asyncio.run(_run(coarse_col, labels, counts, knn, paga, islands, outdir, min_cells, species,
                             model or default_model(), effort))
     plan["coarse_col"] = coarse_col
     with open(path, "w") as f:

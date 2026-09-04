@@ -11,7 +11,7 @@ Command line:
     python -m zmip.report zmip_out
 
 Depends on msp (integration core, plots, report machinery) and needs the
-claude-agent-sdk for both agent steps.
+the shared harness_bridge runtime for both agent steps.
 """
 
 from .foreign import lineage_markers, score_foreign

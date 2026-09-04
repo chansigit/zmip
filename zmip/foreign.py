@@ -34,7 +34,7 @@ def lineage_markers(ad, lineage_col, outdir, top_n=TOP_N):
     """One marker list per lineage (all lineages, zoomed or not — a skipped
     tiny lineage is still something a zoomed one can be contaminated by)."""
     groups = [g for g in ad.obs[lineage_col].astype(str).unique()]
-    tmp = ad[:, :]  # view is fine; rank_genes_groups copies what it needs
+    tmp = ad[:, :]  # Scanpy materializes this view when writing ranking results.
     sc.tl.rank_genes_groups(tmp, lineage_col, groups=groups, method="wilcoxon", use_raw=False, pts=True)
     rows = []
     for g in groups:
