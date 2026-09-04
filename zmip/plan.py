@@ -306,7 +306,7 @@ If validation fails, fix the named problems and call it again."""
 
 
 async def _run(ad, coarse_col, labels, counts, knn, paga, islands, outdir, min_cells, species, model, effort):
-    from msp.harness import ToolSpec, run_agent
+    from harness_bridge import ToolSpec, run_agent
 
     async def submit_plan(args):
         try:
@@ -342,7 +342,7 @@ def plan_lineages(ad, coarse_col, batch_col, outdir, min_cells=DEFAULT_MIN_CELLS
                   model=None, effort=None):
     """Evidence → agent → validated plan, archived to outdir/zmip_plan.json
     (reused when present)."""
-    from msp.harness import default_model
+    from harness_bridge import default_model
 
     path = os.path.join(outdir, "zmip_plan.json")
     counts, knn, paga, islands = lineage_evidence(ad, coarse_col, batch_col, outdir)

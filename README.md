@@ -16,15 +16,21 @@ msp annotated.h5ad ──▶ plan ──▶ per lineage: re-embed → foreign sc
 
 ```bash
 pip install msp-sc                                        # msp on PyPI (import name `msp`)
-pip install zmip                                          # needs claude-agent-sdk + Claude Code CLI credentials
+pip install zmip                                          # includes agent-harness-bridge runtime extras
 ```
 
 ## Usage
 
 ```bash
-python -m zmip msp_out/annotated.h5ad --outdir zmip_out --model claude-sonnet-5 [--min-cells 800]
+python -m zmip msp_out/annotated.h5ad --outdir zmip_out \
+    --model doubao-seed-2-1-turbo-260628 [--min-cells 800]
 python -m zmip.report zmip_out          # rebuild the global report only
 ```
+
+The default is `HARNESS=openai` with Ark/Doubao Turbo. Set
+`HARNESS=claude MODEL=claude-sonnet-5` or `HARNESS=deepseek` to select another
+adapter. ZMIP imports the shared `harness_bridge` directly instead of routing
+agent execution through MSP.
 
 Re-running resumes: the plan is reused, lineages whose contract files
 (`annotation_proposal.json`, `annotated.h5ad`, `report.html`) exist are

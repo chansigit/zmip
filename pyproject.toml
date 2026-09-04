@@ -17,7 +17,7 @@ classifiers = [
 ]
 dependencies = [
     "msp-sc>=0.2.0",   # PyPI name of msp (import name `msp`)
-    "claude-agent-sdk",
+    "agent-harness-bridge[all]==0.1.0",
     "scanpy",
     "anndata",
     "pandas",

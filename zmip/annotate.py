@@ -44,7 +44,7 @@ from msp.inspect import (
     _DEG_SQL_DOC, _DEG_TOOL_DOC, DegCache, DegTables, _cluster_order, _file_inventory, _gene_table,
     _load_removal_mask, _stability_table, _subcluster_once,
 )
-from msp.harness import default_model
+from harness_bridge import default_model
 from msp.report import generate_report
 
 REMOVE_BUDGET = 0.10  # agent-removed share of a lineage above which finalize asks for a second look
@@ -319,7 +319,7 @@ markers and low doublet evidence; mixed profiles are doublets, not reassignments
 
 async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_col, species, prior_cols,
                      paga, pre_removed, foreign_cols, other_keys, language, model, effort, max_turns):
-    from msp.harness import AgentIncompleteError, ToolSpec, run_agent
+    from harness_bridge import AgentIncompleteError, ToolSpec, run_agent
 
     state = {"key": BASE_KEY, "n_sub": 0}
     entries, holder = {}, {}
