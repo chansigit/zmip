@@ -433,13 +433,21 @@ foreign score summary), figures/umap_*.png (subset UMAPs by sample / resolution 
 figures/qc_umap_*.png (QC metrics and foreign scores on the subset UMAP), \
 figures/umap_preannotation_removal.png (cells already slated for removal in this subset).
 
+Recovery rule (takes precedence after any fresh-session/context-reset notice): first call
+annotation_status(cluster='', offset=0) and TaskList. Recover the host's accepted labels/actions/merge/
+reassignments before resuming. Follow status pagination without interleaving submit/subcluster; restart
+at offset=0 after any mutation. cluster_key and n_sub describe the current refinement; a discarded
+parent is not a pending current cluster, and a merge_target_current=false requires revising that partner.
+Do not reconstruct submissions from memory or reread completed clusters/figures just because context reset.
+
 Mandatory workflow:
 1. TaskCreate one task per base cluster ("annotate cluster <id>") before analysis; TaskUpdate to completed \
 only after its submit_cluster succeeded (a split parent's task becomes its subclusters' tasks).
 2. Read the figures first (resolution UMAPs, umap_msp_ann_fine_prev, sample mixing, foreign score UMAPs), \
 then foreign_signal_{BASE_KEY}.csv once (DEG comes through cluster_context / deg_lookup / deg_sql, not Read).
-3. Per cluster: cluster_context, check_genes (batch dozens of genes), check_deg / check_stability when in \
-doubt, then submit_cluster (resubmit to revise; last wins).
+3. Work on at most FOUR pending current clusters at a time: cluster_context, check_genes (batch dozens \
+of genes), check_deg / check_stability when in doubt, then submit_cluster before collecting the next batch \
+(resubmit to revise; last wins). After subcluster, refresh annotation_status and reconcile the new tasks.
 4. finalize_annotation when every task is completed; fix what it reports and call again.
 
 Efficiency: parallel Reads; batch genes; don't re-read files.
@@ -449,6 +457,93 @@ top of a real cell type are biology to LABEL (fine label 'stressed ...'), not to
 are decisive; a lineage losing more than {int(100 * REMOVE_BUDGET)}% of its cells at this step triggers a \
 second look. Be conservative with reassign: only a clean, coherent population with the other lineage's \
 markers and low doublet evidence; mixed profiles are doublets, not reassignments."""
+
+
+def _status_result(text, is_error=False):
+    result = {"content": [{"type": "text", "text": text}]}
+    if is_error:
+        result["is_error"] = True
+    return result
+
+
+_STATUS_MAX_BYTES = 16 * 1024
+_STATUS_PAGE_ITEMS = 8
+_STATUS_DETAIL_BYTES = 6000
+
+
+def _annotation_status(entries, clusters, cluster="", offset=0, *, cluster_key="", n_sub=0):
+    """Bounded recovery view; host submissions, not TaskList, are authoritative."""
+    if not isinstance(cluster, str) or type(offset) is not int or offset < 0:
+        return _status_result("cluster must be a string and offset a nonnegative integer", is_error=True)
+    if cluster:
+        if cluster not in clusters:
+            return _status_result("unknown cluster ID", is_error=True)
+        if cluster not in entries:
+            return _status_result(
+                json.dumps(
+                    {
+                        "submitted": False,
+                        "cluster_key": cluster_key,
+                        "n_sub": n_sub,
+                        "message": "This cluster has no saved submission.",
+                    }
+                )
+            )
+        # ASCII JSON has unambiguous byte offsets, including Unicode evidence.
+        serialized = json.dumps(entries[cluster], ensure_ascii=True, separators=(",", ":"))
+        if offset > len(serialized):
+            return _status_result("offset is past the end of the saved entry", is_error=True)
+        end = min(offset + _STATUS_DETAIL_BYTES, len(serialized))
+        result = {
+            "cluster": cluster,
+            "submitted": True,
+            "entry_json": serialized[offset:end],
+            "offset": offset,
+            "next_offset": end if end < len(serialized) else None,
+            "total_bytes": len(serialized),
+        }
+        result.update(cluster_key=cluster_key, n_sub=n_sub)
+    else:
+        pending = [c for c in clusters if c not in entries]
+        accepted = [entries[c] for c in clusters if c in entries]
+        length = max(len(pending), len(accepted))
+        if offset > length:
+            return _status_result("offset is past the status lists", is_error=True)
+        result = None
+        for page_size in range(_STATUS_PAGE_ITEMS, 0, -1):
+            end = min(offset + page_size, length)
+            summaries = []
+            for entry in accepted[offset:end]:
+                row = {
+                    "cluster_id": entry["cluster_id"],
+                    "action": entry["action"],
+                    "merge_target": entry["merge_target"],
+                    "merge_target_current": entry["merge_target"] is None or entry["merge_target"] in clusters,
+                    "reassign_to": entry.get("reassign_to"),
+                    "review_required": bool(entry.get("review_required", False)),
+                }
+                for field in ("coarse_label", "fine_label"):
+                    value = entry[field]
+                    row[field] = value if len(value) <= 96 else value[:96] + "…"
+                summaries.append(row)
+            result = {
+                "cluster_key": cluster_key,
+                "n_sub": n_sub,
+                "total_clusters": len(clusters),
+                "submitted_count": len(accepted),
+                "pending_count": len(pending),
+                "pending_ids": pending[offset:end],
+                "submitted": summaries,
+                "offset": offset,
+                "next_offset": end if end < length else None,
+                "note": "Host submissions are authoritative. Labels may be shortened; query one cluster for its full saved entry. Restart pagination after any submit or subcluster; merge_target_current=false needs revision.",
+            }
+            if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) <= _STATUS_MAX_BYTES:
+                break
+    text = json.dumps(result, ensure_ascii=False)
+    if len(text.encode("utf-8")) > _STATUS_MAX_BYTES:
+        return _status_result("status identifier exceeds the response size limit", is_error=True)
+    return _status_result(text)
 
 
 async def _run_agent(
@@ -479,6 +574,16 @@ async def _run_agent(
 
     def current():
         return cluster_order(ad.obs[state["key"]].astype(str))
+
+    async def annotation_status(args):
+        return _annotation_status(
+            entries,
+            current(),
+            args.get("cluster", ""),
+            args.get("offset", 0),
+            cluster_key=state["key"],
+            n_sub=state["n_sub"],
+        )
 
     async def cluster_context(args):
         return {
@@ -717,6 +822,15 @@ async def _run_agent(
         return {"content": [{"type": "text", "text": "accepted"}], "_submitted": holder["proposal"]}
 
     tools = [
+        ToolSpec(
+            "annotation_status",
+            "Recover host-accepted annotations on the current clustering. cluster='' pages pending IDs "
+            "and accepted label/action/merge/reassign summaries (offset=0 starts); a specific cluster "
+            "pages its full entry JSON. Follow next_offset. Output <=16 KiB. Restart at offset=0 after "
+            "any submit/subcluster; cluster_key/n_sub identify refinements. Host submissions override TaskList.",
+            {"cluster": str, "offset": int},
+            annotation_status,
+        ),
         ToolSpec(
             "cluster_context",
             "Non-expression context for one current cluster: size, removal share, r1.0 "

@@ -4,7 +4,15 @@ All notable changes to zmip. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## 0.3.3 - 2026-09-05
+## 0.3.3 - Unreleased
+
+### Added
+- A bounded `annotation_status` tool for recovering accepted labels, actions,
+  merge/reassignment targets and pending work after an agent session reset.
+  Status follows the current clustering after subclustering, identifies removed
+  parent merge targets, and pages complete saved entries without flooding context.
+- Recovery prompts reconcile host submissions with task progress and process
+  small batches of pending clusters before requesting more context.
 
 ### Fixed
 - Preserve explicit batch/sample artifact decisions as keep for review even when
