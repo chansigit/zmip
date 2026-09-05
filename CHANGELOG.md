@@ -4,6 +4,12 @@ All notable changes to zmip. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 0.3.2 - 2026-09-05
+
+### Fixed
+- Require MSP >=0.3.2,<0.4 so author-label discovery supports pandas string
+  dtypes, including pandas 3. Retain the compatibility helper layer.
+
 ## 0.3.1 - 2026-09-05
 
 - Require agent-harness-bridge >=0.2.1,<0.3 for bounded host Read support.
