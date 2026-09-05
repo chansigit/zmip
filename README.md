@@ -65,11 +65,11 @@ keep their input expression, counts, and global embedding.
 ## Get started
 
 Start with MSP's `annotated.h5ad`, including its annotations, counts, batch
-metadata, graph, and UMAP. ZMIP currently uses a source-based installation;
-follow the [installation guide](docs/runtime.md#install) and activate the
-resulting environment. Set your Volcengine Ark API key, then run:
+metadata, graph, and UMAP. Install from PyPI (Python 3.10 or newer; MSP and
+the agent harness come with it), set your Volcengine Ark API key, then run:
 
 ```bash
+python -m pip install zmip
 export ARK_API_KEY="YOUR_ARK_API_KEY"
 HARNESS=openai python -m zmip msp_out/annotated.h5ad --outdir zmip_out
 ```

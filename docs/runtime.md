@@ -2,13 +2,22 @@
 
 ## Install
 
-The verified installation uses compatible local source checkouts of ZMIP,
-MSP, agent-harness-bridge, and standissect-lite, with `uv` installed. From the
-ZMIP checkout, run the commands below using absolute paths. The script builds
-non-editable wheels, creates a CPython 3.12 environment, installs the pinned
-scientific dependencies, and runs API and test checks outside the checkout.
-During the 2026-09-04 validation, the configured index could not resolve the
-required harness release, so a bare `pip install zmip` did not reproduce it.
+ZMIP, MSP (`msp-sc`), agent-harness-bridge and standissect-lite are on PyPI,
+so a plain install is enough (Python 3.10 or newer):
+
+```bash
+python -m pip install zmip
+```
+
+ZMIP 0.3 requires `msp-sc>=0.3,<0.4` and `agent-harness-bridge>=0.2,<0.3`;
+`pip` resolves them. No GPU or torch is needed: MSP runs Harmony on the CPU
+through harmonypy 2.
+
+For a reproducible check of a set of source checkouts, `scripts/validate_install.sh`
+builds non-editable wheels of ZMIP, MSP, the harness and standissect-lite,
+creates a CPython 3.12 environment with the pinned scientific stack in
+`constraints-runtime.txt`, and runs the API checks and tests outside the
+checkout:
 
 ```bash
 ./scripts/validate_install.sh /absolute/path/to/validation \
@@ -32,7 +41,10 @@ requires `ARK_API_KEY`. Choose a model with `--model`; `HARNESS=deepseek` and
 `HARNESS=claude` select alternative adapters with their own setup requirements
 in the [shared harness guide](https://github.com/chansigit/agent-harness-bridge).
 `--max-turns` and `--effort` configure agent execution; `--language` sets the
-report language. Only the OpenAI/Doubao path was exercised in the latest
+report language. Progress lines from ZMIP, MSP and the harness are Python
+`logging` records (`zmip`, `msp` and `harness_bridge` logger families) that
+the CLI routes to one flushed stdout handler; embedders can redirect them
+with `harness_bridge.configure_logging("zmip", "msp", stream=..., level=...)`. Only the OpenAI/Doubao path was exercised in the latest
 real-model ZMIP validation.
 
 ## Integration and resources

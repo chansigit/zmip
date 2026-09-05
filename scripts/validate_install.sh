@@ -17,10 +17,10 @@ if [[ ! -x "$validation/env/bin/python" ]]; then
   uv venv "$validation/env" --python "${ZMIP_TEST_PYTHON:-3.12}"
 fi
 python_bin="$validation/env/bin/python"
-uv pip install --python "$python_bin" --index https://download.pytorch.org/whl/cpu \
+uv pip install --python "$python_bin" \
   --reinstall-package zmip --reinstall-package msp-sc \
   --reinstall-package agent-harness-bridge --reinstall-package standissect-lite \
-  --index-strategy unsafe-best-match -c "$repo/constraints-runtime.txt" \
+  -c "$repo/constraints-runtime.txt" \
   "$validation"/wheels/*.whl pytest
 uv pip check --python "$python_bin"
 uv pip freeze --python "$python_bin" > "$validation/requirements-resolved.txt"

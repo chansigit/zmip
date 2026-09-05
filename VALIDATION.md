@@ -1,5 +1,9 @@
 # Quality validation — 2026-09-04
 
+> Record of the 0.2.0 validation. Since 0.3.0 every dependency (`msp-sc`,
+> `agent-harness-bridge`, `standissect-lite`) is on PyPI, so the index
+> caveat below no longer applies; see [docs/runtime.md](docs/runtime.md#install).
+
 Validated changes: recoverable global publication, runtime-aware cache identity,
 reassignment consistency, and reproducible installation/runtime checks.
 
