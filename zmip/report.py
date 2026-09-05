@@ -143,6 +143,24 @@ def _section_lineages(outdir, plan):
             parts.append('<div class="trio">' + "".join(img(p) for p in figs) + "</div>")
         if prop.get("overall"):
             parts.append(f"<p><b>Overall:</b> {html.escape(prop['overall'])}</p>")
+        reviews = [
+            {
+                "cluster": e["cluster_id"],
+                "requested action": e.get("requested_action", ""),
+                "requested reason": e.get("requested_remove_reason", ""),
+                "effective action": e["action"],
+                "host adjustment": str(e.get("host_adjustment", {}).get("reason", "")),
+            }
+            for e in prop["clusters"]
+            if e.get("review_required")
+        ]
+        if reviews:
+            parts.append(
+                "<h4>Host safeguards — retained for review</h4>"
+                + _table(
+                    reviews, ("cluster", "requested action", "requested reason", "effective action", "host adjustment")
+                )
+            )
         rows = [
             {
                 "cluster": e["cluster_id"],

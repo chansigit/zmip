@@ -169,6 +169,23 @@ _CLUSTER_SCHEMA_DOC = """{
 }"""
 
 
+def _guard_batch_action(entry):
+    """Preserve batch-only removal requests as reviewable, non-destructive decisions."""
+    if entry.get("action") == "remove" and entry.get("remove_reason") == "batch":
+        entry.update(
+            requested_action="remove",
+            requested_remove_reason="batch",
+            action="keep",
+            remove_reason=None,
+            host_adjustment={
+                "policy": "batch_annotation_non_destructive_v1",
+                "reason": "Sample/batch composition alone does not establish invalid cells; retained for review.",
+            },
+            review_required=True,
+        )
+    return entry
+
+
 def _validate_cluster(e, clusters, lineage_labels, other_labels):
     if not isinstance(e, dict):
         return ["cluster submission must be a JSON object"]
@@ -303,6 +320,10 @@ def _validate_final(entries, clusters):
 def _apply(ad, key, proposal, pre_removed, lineage):
     """msp_ann_* columns on the subset (so msp's plotting/report code renders
     this round), plus the removal / reassignment archives."""
+    if any(e.get("action") == "remove" and e.get("remove_reason") == "batch" for e in proposal["clusters"]):
+        raise ValueError(
+            "Unreviewed batch-only removal proposal; resubmit through the guarded annotation host in a new directory"
+        )
     entries = {str(e["cluster_id"]): e for e in proposal["clusters"]}
     comp = components(entries)
     lab = ad.obs[key].astype(str)
@@ -371,7 +392,9 @@ Reasoning chain per cluster:
 real substate (specific positive markers) vs resolution splinter (only depth/QC/cycle/stress genes).
 2. Identity — coarse label (one of this lineage's, unless reassigning) and a fine label in English.
 3. Foreign signal — read the foreign_* scores together with doublet_score/decontX/markers; conclude \
-keep / remove (doublet, low-quality, ambient, stress, batch) / reassign.
+keep / remove (independently supported doublet, low-quality, ambient, stress) / reassign.
+Sample/batch enrichment alone is not evidence of invalid cells: keep it for review. The host
+converts batch-only removal requests to keep, preserving the original request and review flag.
 4. Merge — same population as another current cluster → merge_target. Merge is explicit: equal fine labels \
 must be merged (or made distinct); a merged group shares one coarse + one fine label and one action.
 If a cluster is heterogeneous, split it with subcluster (ids like "5,0"); tools and submissions then use \
@@ -481,10 +504,34 @@ async def _run_agent(
         return {"content": [{"type": "text", "text": tables.sql(args.get("query", ""))}]}
 
     async def check_genes(args):
+        def response(text, error=False):
+            result = {"content": [{"type": "text", "text": text}]}
+            if error:
+                result["is_error"] = True
+            return result
+
+        selected = args.get("clusters", [])
+        if not isinstance(selected, list):
+            return response("clusters must be a list of exact cluster IDs; [] means all", True)
+        available = current()
+        preview = [str(c)[:64] for c in available[:32]]
+        note = f"Available cluster IDs (first {len(preview)} of {len(available)}): {preview}"
+        unknown = sorted(set(map(str, selected)) - set(available))
+        if unknown:
+            return response(f"unknown cluster IDs: {[c[:64] for c in unknown[:8]]}; {note}", True)
         genes = args["genes"]
         if isinstance(genes, str):
             genes = [g for g in genes.replace(",", " ").split() if g]
-        return {"content": [{"type": "text", "text": gene_table(ad, genes, state["key"])}]}
+        # Keep the MSP 0.3 three-argument contract; AnnData slicing is a view.
+        subset = ad[ad.obs[state["key"]].astype(str).isin(list(map(str, selected)))] if selected else ad
+        text = gene_table(subset, genes, state["key"])
+        if len(text.encode("utf-8")) > 16 * 1024:
+            return response(
+                "Expression table exceeds the 16 KiB tool-result limit; no expression rows returned. "
+                "Retry with fewer genes and explicit clusters (target plus relevant comparisons). " + note,
+                True,
+            )
+        return response(text)
 
     async def check_deg(args):
         c = str(args["cluster"])
@@ -554,6 +601,20 @@ async def _run_agent(
         if problems:
             return {
                 "content": [{"type": "text", "text": "invalid, fix and resubmit:\n- " + "\n- ".join(problems)}],
+                "is_error": True,
+            }
+        _guard_batch_action(e)
+        problems = _validate_cluster(e, cur, lineage_labels, other_labels)
+        if problems:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "batch-only removal must be retained for review; "
+                        "supply a valid within-lineage keep label or independently justified reassignment:\n- "
+                        + "\n- ".join(problems),
+                    }
+                ],
                 "is_error": True,
             }
         e["cluster_id"] = str(e["cluster_id"])
@@ -663,8 +724,9 @@ async def _run_agent(
         ToolSpec(
             "check_genes",
             "Per-cluster mean expression and expressing-cell fraction for the given genes "
-            "(case-insensitive), on the current clustering.",
-            {"genes": list},
+            "(case-insensitive), on the current clustering. clusters selects exact cluster IDs; [] means all. "
+            "Results over 16 KiB are rejected; narrow genes and clusters to relevant comparisons.",
+            {"genes": list, "clusters": list},
             check_genes,
         ),
         ToolSpec(

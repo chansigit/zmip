@@ -4,7 +4,13 @@ All notable changes to zmip. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.3.1 - 2026-09-05
+
+- Require agent-harness-bridge >=0.2.1,<0.3 for bounded host Read support.
+
+### Safety and agent recovery
+- Bound agent expression tables to 16 KiB with explicit cluster selection; retain the MSP 0.3 three-argument gene-table API.
+- Preserve batch-only annotation removal requests as keep with host audit and review reporting; validate effective lineage labels and reject unsafe legacy proposal application.
 
 ### Added
 - GitHub Actions for Ruff lint/format, pytest with coverage reporting on Python
