@@ -44,11 +44,18 @@ def validate(input_path, outdir):
     for column in (c for c in original.obs if c.startswith("msp_ann_")):
         if not result.obs[column].astype(str).equals(original.obs[column].astype(str)):
             raise ValueError(f"original annotation {column!r} changed")
-    return {"validated": True, "input_cells": source.n_obs, "output_cells": result.n_obs,
-            "genes": result.n_vars, "removed": len(removed), "reassigned": len(reassigned),
-            "input_sha256": cache.file_digest(input_path),
-            "output_sha256": cache.file_digest(root / "annotated_zmip.h5ad"),
-            "preserved_layers": list(source.layers), "runtime": json.loads((root / ".zmip-run.json").read_text())["identity"]["runtime"]}
+    return {
+        "validated": True,
+        "input_cells": source.n_obs,
+        "output_cells": result.n_obs,
+        "genes": result.n_vars,
+        "removed": len(removed),
+        "reassigned": len(reassigned),
+        "input_sha256": cache.file_digest(input_path),
+        "output_sha256": cache.file_digest(root / "annotated_zmip.h5ad"),
+        "preserved_layers": list(source.layers),
+        "runtime": json.loads((root / ".zmip-run.json").read_text())["identity"]["runtime"],
+    }
 
 
 if __name__ == "__main__":
