@@ -30,7 +30,7 @@
           "annotate",
           "harness"
         ],
-        "note": "Planning and per-cluster annotation both call the model through harness_bridge; the host validates every submission."
+        "note": "harness_bridge hands tools and a submit function to the model and returns the host-validated submission."
       },
       {
         "id": "guards",
@@ -210,7 +210,7 @@
       "id": "harness",
       "type": "external",
       "label": "harness_bridge",
-      "sublabel": "Doubao / DeepSeek / Claude",
+      "sublabel": "model API middleware",
       "pos": [
         602,
         260
@@ -218,7 +218,8 @@
       "size": [
         150,
         64
-      ]
+      ],
+      "tag": "Doubao / DeepSeek / Claude"
     },
     {
       "id": "report",
@@ -262,10 +263,21 @@
       "id": "plan-agent",
       "from": "plan",
       "to": "harness",
-      "label": "submit_plan",
+      "label": "run_agent + tools",
       "variant": "dashed",
       "fromSide": "bottom",
-      "toSide": "top"
+      "toSide": "top",
+      "via": [
+        [
+          540,
+          202
+        ],
+        [
+          660,
+          202
+        ]
+      ],
+      "labelSegment": 1
     },
     {
       "id": "markers",
@@ -301,10 +313,21 @@
       "id": "annotate-agent",
       "from": "annotate",
       "to": "harness",
-      "label": "finalize_annotation",
+      "label": "run_agent + tools",
       "variant": "dashed",
       "fromSide": "top",
-      "toSide": "bottom"
+      "toSide": "bottom",
+      "via": [
+        [
+          840,
+          382
+        ],
+        [
+          700,
+          382
+        ]
+      ],
+      "labelSegment": 1
     },
     {
       "id": "lineage-result",
@@ -342,6 +365,46 @@
       "label": "atomic replace",
       "variant": "emphasis",
       "labelDy": 34
+    },
+    {
+      "id": "plan-return",
+      "from": "harness",
+      "to": "plan",
+      "label": "validated plan",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "via": [
+        [
+          720,
+          180
+        ],
+        [
+          600,
+          180
+        ]
+      ],
+      "labelSegment": 1
+    },
+    {
+      "id": "annotate-return",
+      "from": "harness",
+      "to": "annotate",
+      "label": "validated proposal",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          640,
+          404
+        ],
+        [
+          760,
+          404
+        ]
+      ],
+      "labelSegment": 1
     }
   ],
   "cards": [
