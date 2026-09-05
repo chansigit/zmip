@@ -266,18 +266,7 @@
       "label": "run_agent + tools",
       "variant": "dashed",
       "fromSide": "bottom",
-      "toSide": "top",
-      "via": [
-        [
-          540,
-          202
-        ],
-        [
-          660,
-          202
-        ]
-      ],
-      "labelSegment": 1
+      "toSide": "top"
     },
     {
       "id": "markers",
@@ -316,18 +305,7 @@
       "label": "run_agent + tools",
       "variant": "dashed",
       "fromSide": "top",
-      "toSide": "bottom",
-      "via": [
-        [
-          840,
-          382
-        ],
-        [
-          700,
-          382
-        ]
-      ],
-      "labelSegment": 1
+      "toSide": "bottom"
     },
     {
       "id": "lineage-result",
@@ -372,19 +350,8 @@
       "to": "plan",
       "label": "validated plan",
       "variant": "dashed",
-      "fromSide": "top",
-      "toSide": "bottom",
-      "via": [
-        [
-          720,
-          180
-        ],
-        [
-          600,
-          180
-        ]
-      ],
-      "labelSegment": 1
+      "fromSide": "left",
+      "toSide": "left"
     },
     {
       "id": "annotate-return",
@@ -392,19 +359,8 @@
       "to": "annotate",
       "label": "validated proposal",
       "variant": "dashed",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "via": [
-        [
-          640,
-          404
-        ],
-        [
-          760,
-          404
-        ]
-      ],
-      "labelSegment": 1
+      "fromSide": "right",
+      "toSide": "top"
     }
   ],
   "cards": [

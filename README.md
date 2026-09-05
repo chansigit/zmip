@@ -9,6 +9,13 @@
 </p>
 
 <p align="center">
+  <a href="https://pypi.org/project/zmip/"><img src="https://img.shields.io/pypi/v/zmip?label=PyPI&amp;color=258B81&amp;style=flat" alt="PyPI version"></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat&amp;logo=python&amp;logoColor=white" alt="Python 3.10 or newer"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-173B49?style=flat" alt="MIT license"></a>
+  <a href="https://github.com/chansigit/eca-rsi"><img src="https://img.shields.io/badge/Ecosystem-ECA--RSI-258B81?style=flat" alt="Part of the ECA-RSI ecosystem"></a>
+</p>
+
+<p align="center">
   <a href="#why-zoom-in">Why zoom in?</a> ·
   <a href="#get-started">Get started</a> ·
   <a href="#read-your-results">Results</a> ·
@@ -36,14 +43,17 @@ using marker genes, quality measurements, and signals from other lineages.
 The program checks the submitted decisions before merging the results back
 into the global dataset.
 
-```mermaid
-flowchart LR
-    A[MSP annotated dataset] --> B[Plan lineages]
-    B --> C[Re-embed each lineage]
-    C --> D[Review labels and quality]
-    D --> E[Merge annotations and reports]
-    B -->|Small lineages: keep labels| E
-```
+Click the diagram to open the interactive version, with pan, zoom, search,
+and guided views.
+
+<p align="center">
+  <a href="https://raw.githack.com/chansigit/zmip/main/docs/architecture.html">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/chansigit/zmip/main/assets/architecture-dark.svg">
+      <img src="https://raw.githubusercontent.com/chansigit/zmip/main/assets/architecture-light.svg" alt="ZMIP module structure: the input H5AD is planned into lineages, each lineage is re-embedded and annotated by an agent through harness_bridge, results are merged back with host checks and published atomically" width="960">
+    </picture>
+  </a>
+</p>
 
 ## What you get
 
@@ -114,7 +124,6 @@ ZMIP follows [OSP](https://github.com/chansigit/osp) for sample-level review
 and [MSP](https://github.com/chansigit/msp) for integration within the
 [ECA-RSI](https://github.com/chansigit/eca-rsi) workflow.
 See [inputs and outputs](docs/input-output.md) for data conventions,
-[module structure diagram](docs/architecture.html) for the code layout,
 [runtime options](docs/runtime.md) for installation and configuration,
 and [GitHub issues](https://github.com/chansigit/zmip/issues) for questions
 or problems. ZMIP uses the [MIT license](LICENSE).
