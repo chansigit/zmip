@@ -18,6 +18,7 @@ decontX.
         shows them in the QC grid)
 """
 
+import logging
 import os
 
 import numpy as np
@@ -25,6 +26,8 @@ import pandas as pd
 import scanpy as sc
 from anndata import AnnData
 from msp.plots import save_single_umap, slug
+
+log = logging.getLogger(__name__)
 
 TOP_N = 30
 MAX_PCT_OUT = 0.35  # a marker must be expressed in <35% of cells outside its lineage
@@ -40,8 +43,8 @@ def lineage_markers(ad, lineage_col, outdir, top_n=TOP_N):
     for g in groups:
         n_group, n_rest = int(sizes[g]), ad.n_obs - int(sizes[g])
         if min(n_group, n_rest) < 2:
-            print(f"== lineage {g!r}: cannot estimate markers with {n_group} lineage cell(s) and "
-                  f"{n_rest} reference cell(s); need at least 2 each — no foreign score for it", flush=True)
+            log.warning(f"== lineage {g!r}: cannot estimate markers with {n_group} lineage cell(s) and "
+                  f"{n_rest} reference cell(s); need at least 2 each — no foreign score for it")
         else:
             eligible.append(g)
     # Exclude tiny groups from testing, not from the other groups' reference cells.
@@ -67,7 +70,7 @@ def lineage_markers(ad, lineage_col, outdir, top_n=TOP_N):
     out.to_csv(os.path.join(outdir, "lineage_markers.csv"), index=False)
     for g in eligible:
         if not (out["lineage"] == g).any():
-            print(f"== no lineage markers pass pct_out<{MAX_PCT_OUT} for {g!r} — no foreign score for it", flush=True)
+            log.info(f"== no lineage markers pass pct_out<{MAX_PCT_OUT} for {g!r} — no foreign score for it")
     return {g: out.loc[out["lineage"] == g, "gene"].tolist() for g in groups}
 
 
@@ -83,7 +86,7 @@ def score_foreign(sub, markers, own_lineage, cluster_keys, outdir, figdir):
         genes = [g for g in genes if g in sub.var_names]
         col = f"foreign_{slug(lin)}"
         if len(genes) < 5:
-            print(f"== foreign {lin}: only {len(genes)} markers present, skipped", flush=True)
+            log.info(f"== foreign {lin}: only {len(genes)} markers present, skipped")
             continue
         sc.tl.score_genes(sub, genes, score_name=col, random_state=0)
         cols.append(col)

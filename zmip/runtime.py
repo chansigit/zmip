@@ -41,18 +41,18 @@ def check_runtime():
     """Test the shared API behavior that package version ranges cannot guarantee."""
     try:
         from harness_bridge import ToolSpec, resolve_agent_config, run_agent
-        from msp.inspect import DegCache, DegTables, _parse_reference
+        from msp.evidence import DegCache, DegTables, parse_reference
         from msp.integrate import integrate_adata
 
         assert all(callable(f) for f in (ToolSpec, resolve_agent_config, run_agent, DegCache,
                                          DegTables, integrate_adata))
         known = ["5", "0", "1", "5,0", "5,1"]
-        if _parse_reference("5,1", known) != ("5,1",):
+        if parse_reference("5,1", known) != ("5,1",):
             raise ValueError("MSP splits exact subcluster IDs")
-        if set(_parse_reference('"5,0","5,1"', known)) != {"5,0", "5,1"}:
+        if set(parse_reference('"5,0","5,1"', known)) != {"5,0", "5,1"}:
             raise ValueError("MSP cannot parse quoted pooled subcluster IDs")
         try:
-            _parse_reference("5,0,5,1", known)
+            parse_reference("5,0,5,1", known)
         except ValueError:
             pass
         else:

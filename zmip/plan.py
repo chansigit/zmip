@@ -32,6 +32,7 @@ The plan is archived to zmip_plan.json and reused on resume.
 import asyncio
 import copy
 import json
+import logging
 import os
 
 import numpy as np
@@ -42,6 +43,8 @@ from anndata import AnnData
 from msp.plots import save_single_umap, slug
 
 from .cache import write_json
+
+log = logging.getLogger(__name__)
 
 DEFAULT_MIN_CELLS = 800
 
@@ -209,7 +212,7 @@ def lineage_evidence(ad, coarse_col, batch_col, outdir):
             paga.index.name = "paga connectivity"
             paga.to_csv(os.path.join(outdir, "lineage_paga.csv"))
         except Exception as e:  # PAGA is a convenience, never a blocker
-            print(f"== paga skipped: {e}", flush=True)
+            log.warning(f"== paga skipped: {e}")
 
     n = len(labels)
     save_single_umap(ad, coarse_col, os.path.join(figdir, f"umap_{slug(coarse_col)}.png"),
@@ -401,7 +404,7 @@ def plan_lineages(ad, coarse_col, batch_col, outdir, min_cells=DEFAULT_MIN_CELLS
             raise ValueError(f"recorded plan does not match current input/options: {problems}; use --force")
         if normalized["lineages"] != plan["lineages"]:
             raise ValueError("recorded lineage counts or zoom decisions changed; use --force")
-        print(f"== reusing recorded plan {path}", flush=True)
+        log.info(f"== reusing recorded plan {path}")
         return plan
     labels = list(counts.index)
     plan = asyncio.run(_run(coarse_col, labels, counts, knn, paga, islands, outdir, min_cells, species,

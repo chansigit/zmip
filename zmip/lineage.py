@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import os
 import signal
@@ -37,6 +38,7 @@ import time
 
 import pandas as pd
 import scanpy as sc
+from harness_bridge import configure_logging
 from msp.integrate import integrate_adata
 from msp.plots import save_single_umap
 from msp.resources import available_cpus, available_memory_bytes, current_rss_bytes
@@ -46,6 +48,8 @@ from .annotate import BASE_KEY, PARENT_KEY, PREV_SUFFIX, PREVIOUS_COLS, annotate
 from .cli import add_integration_options, parse_harmony
 from .foreign import score_foreign
 from .plan import _lineage_slugs
+
+log = logging.getLogger(__name__)
 
 SUBSET_FILE = "subset.h5ad"  # the parent's hand-off to a lineage subprocess; removed once loaded
 FIXED_BYTES_PER_PROCESS = 512 << 20
@@ -119,13 +123,13 @@ def run_lineage(sub, name, labels, all_labels, markers, outdir, *, batch_col, sp
     cache.invalidate(d, "complete")
     generation = _generation(outdir)
     expected = sub.obs_names.copy()
-    print(f"== [{name}] re-embedding {sub.n_obs} cells", flush=True)
+    log.info(f"== [{name}] re-embedding {sub.n_obs} cells")
     integrate_adata(sub, batch_col, d, species=species, resolutions=tuple(resolutions),
                     n_top_genes=n_top_genes, n_pcs=n_pcs, n_neighbors=n_neighbors,
                     harmony_kwargs=harmony_kwargs, inputs=[h5ad_path],
                     meta_extra={"zmip_lineage": name, "zmip_coarse_labels": list(labels)})
     figdir = os.path.join(d, "figures")
-    print(f"== [{name}] foreign-lineage scores", flush=True)
+    log.info(f"== [{name}] foreign-lineage scores")
     foreign_cols = score_foreign(sub, markers, name, keys_for_foreign, d, figdir)
     for c in PREVIOUS_COLS:
         col = c + PREV_SUFFIX
@@ -175,9 +179,9 @@ def _pump(proc, tag):
     for raw in proc.stdout:
         line = raw.rstrip("\n")
         if line.startswith("== [") and f"{tag}]" in line[:len(tag) + 12]:
-            print(line, flush=True)  # already tagged by the agent trace ("== [zmip <tag>] ..." / "== [<tag>] ...")
+            log.info(line)  # already tagged by the agent trace ("== [zmip <tag>] ..." / "== [<tag>] ...")
         else:
-            print(f"[{tag}] {line}", flush=True)
+            log.info(f"[{tag}] {line}")
 
 
 def _signal_group(proc, sig):
@@ -229,9 +233,9 @@ def run_lineages_parallel(ad, todo, all_labels, outdir, child_args, *, coarse_co
     {name: result} for the ones that finished and raises if any failed."""
     todo = sorted(todo, key=lambda ln: -ln["n_cells"])  # biggest first: it bounds the wall-clock
     max_parallel, budget, threads = plan_concurrency(todo)
-    print(f"== zmip lineages in parallel: {len(todo)} to run, up to {max_parallel} at once, "
+    log.info(f"== zmip lineages in parallel: {len(todo)} to run, up to {max_parallel} at once, "
           f"{threads} thread(s) each, memory budget {budget / 2**30:.1f} GiB "
-          f"({available_cpus()} cpu(s), {available_memory_bytes() / 2**30:.1f} GiB available)", flush=True)
+          f"({available_cpus()} cpu(s), {available_memory_bytes() / 2**30:.1f} GiB available)")
     env = dict(os.environ)
     for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS",
               "MSP_MAX_THREADS"):
@@ -256,10 +260,10 @@ def run_lineages_parallel(ad, todo, all_labels, outdir, child_args, *, coarse_co
                 took = (time.time() - t0) / 60
                 if rc == 0 and contract_done(lineage_dir(outdir, name)):
                     finished.append(name)
-                    print(f"== [{name}] lineage done in {took:.1f} min", flush=True)
+                    log.info(f"== [{name}] lineage done in {took:.1f} min")
                 else:
                     failed[name] = rc
-                    print(f"== [{name}] lineage FAILED (exit {rc}) after {took:.1f} min", flush=True)
+                    log.warning(f"== [{name}] lineage FAILED (exit {rc}) after {took:.1f} min")
             # launch
             used = sum(est for _, est, _, _ in running.values())
             while pending and len(running) < max_parallel:
@@ -280,8 +284,8 @@ def run_lineages_parallel(ad, todo, all_labels, outdir, child_args, *, coarse_co
                 running[name] = (proc, est, time.time(), log_thread)
                 log_thread.start()
                 used += est
-                print(f"== [{name}] lineage started: {ln['n_cells']} cells, est {est / 2**30:.1f} GiB, "
-                      f"{len(running)} running, {len(pending)} waiting", flush=True)
+                log.info(f"== [{name}] lineage started: {ln['n_cells']} cells, est {est / 2**30:.1f} GiB, "
+                      f"{len(running)} running, {len(pending)} waiting")
             if running:
                 time.sleep(5)
     finally:
@@ -315,6 +319,7 @@ def main(argv=None):
     parser.add_argument("--effort", default=None)
     parser.add_argument("--max-turns", type=int, default=200)
     args = parser.parse_args(argv)
+    configure_logging("zmip", "msp")
     try:
         args.resolutions = validate_resolutions(args.resolutions)
         harmony_kwargs = parse_harmony(args.harmony)

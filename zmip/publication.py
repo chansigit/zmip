@@ -7,12 +7,15 @@ from immutable backups before another writer or report reader proceeds.
 
 from contextlib import contextmanager
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
 import tempfile
 
 from . import cache
+
+log = logging.getLogger(__name__)
 
 RECEIPT = ".zmip-global.json"
 JOURNAL = ".zmip-publish.json"
@@ -87,7 +90,7 @@ def recover(outdir):
             target.unlink(missing_ok=True)
     journal_path.unlink()
     shutil.rmtree(transaction)
-    print("== restored previous global output after interrupted publication", flush=True)
+    log.warning("== restored previous global output after interrupted publication")
 
 
 @contextmanager

@@ -4,6 +4,7 @@ import asyncio
 import copy
 import importlib
 import json
+import logging
 import runpy
 import signal
 import subprocess
@@ -182,7 +183,7 @@ def test_pool_cleans_launched_process_on_parent_failure(tmp_path, monkeypatch, f
 
 
 @pytest.mark.parametrize("first_exit", [0, 1])
-def test_pool_reaps_logs_and_allows_independent_lineage_to_finish(tmp_path, monkeypatch, capsys, first_exit):
+def test_pool_reaps_logs_and_allows_independent_lineage_to_finish(tmp_path, monkeypatch, caplog, first_exit):
     real_popen, real_sleep = subprocess.Popen, time.sleep
     processes = []
 
@@ -204,13 +205,14 @@ def test_pool_reaps_logs_and_allows_independent_lineage_to_finish(tmp_path, monk
         return lineage.run_lineages_parallel(None, todo, {"A", "B"}, str(tmp_path), [],
                                              coarse_col="coarse", fine_col="fine")
 
-    if first_exit:
-        with pytest.raises(RuntimeError, match="failed"):
-            run()
-    else:
-        assert set(run()) == {"A", "B"}
+    with caplog.at_level(logging.INFO, logger="zmip"):
+        if first_exit:
+            with pytest.raises(RuntimeError, match="failed"):
+                run()
+        else:
+            assert set(run()) == {"A", "B"}
     assert len(processes) == 2 and all(p.poll() is not None and p.stdout.closed for p in processes)
-    output = capsys.readouterr().out
+    output = caplog.text
     assert "[A] child output" in output and "[B] child output" in output
     assert "[B] lineage done" in output
 

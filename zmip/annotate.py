@@ -30,6 +30,7 @@ this round's labels), report.html.
 
 import asyncio
 import json
+import logging
 import os
 
 import numpy as np
@@ -41,24 +42,26 @@ from msp.annotate import (
     PARENT_KEY,
     REMOVE_REASONS,
     _components,
-    _load_paga_neighbors,
     _plot,
     _prior_label_columns,
 )
-from msp.inspect import (
-    _DEG_SQL_DOC,
-    _DEG_TOOL_DOC,
+from msp.evidence import (
+    DEG_SQL_DOC,
+    DEG_TOOL_DOC,
     DegCache,
     DegTables,
-    _cluster_order,
-    _file_inventory,
-    _gene_table,
-    _load_removal_mask,
-    _parse_reference,
-    _stability_table,
-    _subcluster_once,
+    cluster_order,
+    file_inventory,
+    gene_table,
+    load_paga_neighbors,
+    load_removal_mask,
+    parse_reference,
+    stability_table,
 )
+from msp.inspect import _subcluster_once
 from msp.report import generate_report
+
+log = logging.getLogger(__name__)
 
 REMOVE_BUDGET = 0.10  # agent-removed share of a lineage above which finalize asks for a second look
 
@@ -313,7 +316,7 @@ If a cluster is heterogeneous, split it with subcluster (ids like "5,0"); tools 
 the refined ids, and any earlier submission for the split parent is discarded — resubmit its parts.
 
 All relevant files (paths relative to the working directory):
-{_file_inventory(outdir)}
+{file_inventory(outdir)}
 
 What they are: deg_global_{{key}}.csv / deg_local_{{key}}.csv (subset DEG at r1.0/r2.0, computed after \
 excluding preannotation_removal.csv cells — TOO LARGE to Read: cluster_context carries each cluster's top-12 \
@@ -350,10 +353,10 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
     entries, holder = {}, {}
     deg = DegCache(ad, outdir, pre_removed, label=f"zmip {lineage}")
     tables = DegTables(outdir, base_key=BASE_KEY)
-    print(f"== [{lineage}] precomputed DEG tables loaded: {tables.n_rows} rows for keys {tables.keys}", flush=True)
+    log.info(f"== [{lineage}] precomputed DEG tables loaded: {tables.n_rows} rows for keys {tables.keys}")
 
     def current():
-        return _cluster_order(ad.obs[state["key"]].astype(str))
+        return cluster_order(ad.obs[state["key"]].astype(str))
 
     async def cluster_context(args):
         return {"content": [{"type": "text", "text": _context(
@@ -373,7 +376,7 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
         genes = args["genes"]
         if isinstance(genes, str):
             genes = [g for g in genes.replace(",", " ").split() if g]
-        return {"content": [{"type": "text", "text": _gene_table(ad, genes, state["key"])}]}
+        return {"content": [{"type": "text", "text": gene_table(ad, genes, state["key"])}]}
 
     async def check_deg(args):
         c = str(args["cluster"])
@@ -382,7 +385,7 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
             return {"content": [{"type": "text", "text": f"unknown cluster {c!r}; current: {cur}"}], "is_error": True}
         reference = str(args.get("reference") or "rest").strip() or "rest"
         try:
-            _parse_reference(reference, cur)
+            parse_reference(reference, cur)
         except ValueError as exc:
             return {"content": [{"type": "text", "text": str(exc) + f"; current: {cur}"}], "is_error": True}
         return {"content": [{"type": "text", "text": deg.table(
@@ -391,7 +394,7 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
 
     async def check_stability(args):
         return {"content": [{"type": "text",
-                             "text": _stability_table(ad, str(args["cluster"]), state["key"],
+                             "text": stability_table(ad, str(args["cluster"]), state["key"],
                                                       [k for k in other_keys if k != state["key"]])}]}
 
     async def subcluster(args):
@@ -427,8 +430,8 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
         entries[e["cluster_id"]] = e
         left = [c for c in cur if c not in entries]
         tag = e["action"] + (f"→{e['reassign_to']}" if e["action"] == "reassign" else "")
-        print(f"== [{lineage}] cluster {e['cluster_id']}: {e['coarse_label']} / {e['fine_label']} [{tag}"
-              f"{', merge→' + e['merge_target'] if e['merge_target'] else ''}]", flush=True)
+        log.info(f"== [{lineage}] cluster {e['cluster_id']}: {e['coarse_label']} / {e['fine_label']} [{tag}"
+              f"{', merge→' + e['merge_target'] if e['merge_target'] else ''}]")
         return {"content": [{"type": "text", "text": f"recorded {e['cluster_id']}; {len(entries)}/{len(cur)} "
                              + (f"submitted, remaining: {left}" if left else "submitted — call finalize_annotation")}]}
 
@@ -466,8 +469,8 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
                               "budget_exceeded": frac > REMOVE_BUDGET,
                               "overall": str(args.get("overall") or "")}
         if frac > REMOVE_BUDGET:
-            print(f"== [{lineage}] WARNING: agent removes {100 * frac:.1f}% of the lineage (budget "
-                  f"{100 * REMOVE_BUDGET:.0f}%) — reaffirmed, recorded as budget_exceeded", flush=True)
+            log.warning(f"== [{lineage}] WARNING: agent removes {100 * frac:.1f}% of the lineage (budget "
+                  f"{100 * REMOVE_BUDGET:.0f}%) — reaffirmed, recorded as budget_exceeded")
         with open(os.path.join(outdir, "annotation_proposal.json"), "w") as fh:
             json.dump(holder["proposal"], fh, ensure_ascii=False, indent=2)
         return {"content": [{"type": "text", "text": "accepted"}], "_submitted": holder["proposal"]}
@@ -476,10 +479,10 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
         ToolSpec("cluster_context", "Non-expression context for one current cluster: size, removal share, r1.0 "
                  "parent + siblings, PAGA neighbours, samples, QC medians, foreign-lineage scores, previous-round "
                  "labels, prior label compositions.", {"cluster": str}, cluster_context),
-        ToolSpec("deg_lookup", _DEG_TOOL_DOC,
+        ToolSpec("deg_lookup", DEG_TOOL_DOC,
                  {"cluster": str, "gene": str, "view": str, "key": str, "top_n": int, "min_logfc": float,
                   "max_padj": float, "min_pct1": float, "max_pct2": float}, deg_lookup),
-        ToolSpec("deg_sql", _DEG_SQL_DOC, {"query": str}, deg_sql),
+        ToolSpec("deg_sql", DEG_SQL_DOC, {"query": str}, deg_sql),
         ToolSpec("check_genes", "Per-cluster mean expression and expressing-cell fraction for the given genes "
                  "(case-insensitive), on the current clustering.", {"genes": list}, check_genes),
         ToolSpec("check_deg", "On-demand wilcoxon DEG for one current cluster. reference='rest' (default) or a "
@@ -528,11 +531,11 @@ def annotate_lineage(ad, outdir, lineage, lineage_labels, other_labels, foreign_
     outdir; returns (proposal, removed_df, reassigned_df)."""
     batch_col = ad.uns["msp"]["batch_col"]
     other_keys = [k for k in ad.obs.columns if k.startswith("msp_leiden_r")]
-    pre_removed = _load_removal_mask(outdir, ad)
+    pre_removed = load_removal_mask(outdir, ad)
     prior_cols = [c for c in _prior_label_columns(ad, batch_col) if not c.endswith(PREV_SUFFIX)]
-    paga = _load_paga_neighbors(outdir, BASE_KEY)
-    print(f"== [{lineage}] {int(pre_removed.sum())}/{ad.n_obs} cells pre-slated for removal; "
-          f"prior cols {prior_cols}; foreign {foreign_cols}", flush=True)
+    paga = load_paga_neighbors(outdir, BASE_KEY)
+    log.info(f"== [{lineage}] {int(pre_removed.sum())}/{ad.n_obs} cells pre-slated for removal; "
+          f"prior cols {prior_cols}; foreign {foreign_cols}")
     proposal = asyncio.run(_run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_col, species,
                                       prior_cols, paga, pre_removed, foreign_cols, other_keys, language,
                                       model or default_model(), effort, max_turns))
@@ -547,6 +550,5 @@ def annotate_lineage(ad, outdir, lineage, lineage_labels, other_labels, foreign_
     from msp.report import compose_title
 
     generate_report(outdir, title=compose_title("zoom-in lineage (zmip)", outdir, subject=lineage))
-    print(f"== [{lineage}] removed {len(removed)}, reassigned {len(reassigned)}, kept {kept.n_obs}/{ad.n_obs}",
-          flush=True)
+    log.info(f"== [{lineage}] removed {len(removed)}, reassigned {len(reassigned)}, kept {kept.n_obs}/{ad.n_obs}")
     return proposal, removed, reassigned

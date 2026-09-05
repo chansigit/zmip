@@ -242,6 +242,9 @@ if __name__ == "__main__":
     ap.add_argument("outdir")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
+    from harness_bridge import configure_logging
+
+    configure_logging("zmip", "msp")
     with cache.lock_run(a.outdir):
         publication.recover(a.outdir)
         print(f"wrote {generate_report(a.outdir, out_html=a.out)}")

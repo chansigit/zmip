@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zmip"
-version = "0.2.0"
+version = "0.3.0"
 description = "Zoom-in pipeline: per-lineage re-embedding, foreign-lineage scoring and agent refinement of an msp annotation"
 readme = "README.md"
 license = "MIT"
@@ -16,8 +16,8 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
-    "msp-sc>=0.2.0,<0.3",   # private API compatibility is also checked at runtime
-    "agent-harness-bridge[all]==0.1.0",
+    "msp-sc>=0.3.0,<0.4",   # public msp.evidence API; behaviour is also checked at runtime
+    "agent-harness-bridge[all]>=0.2.0,<0.3",
     "scanpy",
     "anndata",
     "pandas",

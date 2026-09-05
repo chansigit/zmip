@@ -3,6 +3,7 @@
 import copy
 import importlib
 import json
+import logging
 import runpy
 import sys
 from pathlib import Path
@@ -273,7 +274,7 @@ def marker_input(groups):
     return ad
 
 
-def test_singleton_skipped_but_retained_in_reference(tmp_path, monkeypatch, capsys):
+def test_singleton_skipped_but_retained_in_reference(tmp_path, monkeypatch, caplog):
     ad = marker_input(["A"] * 4 + ["B"] * 4 + ["tiny"])
     before = ad.copy()
     real_rank = sc.tl.rank_genes_groups
@@ -284,10 +285,11 @@ def test_singleton_skipped_but_retained_in_reference(tmp_path, monkeypatch, caps
         return real_rank(data, *args, **kwargs)
 
     monkeypatch.setattr(sc.tl, "rank_genes_groups", record)
-    markers = lineage_markers(ad, "lineage", tmp_path)
+    with caplog.at_level(logging.WARNING, logger="zmip"):
+        markers = lineage_markers(ad, "lineage", tmp_path)
     assert calls == [(9, ["A", "B"])]
     assert markers["tiny"] == [] and markers["A"] and markers["B"]
-    assert "'tiny': cannot estimate markers" in capsys.readouterr().out
+    assert "'tiny': cannot estimate markers" in caplog.text
     assert list(pd.read_csv(tmp_path / "lineage_markers.csv")) == MARKER_COLUMNS
     # Eligible results must match Scanpy on the full reference, not a pruned subset.
     expected = before.copy()

@@ -19,12 +19,13 @@ the msp labels unchanged.
 
 import argparse
 import hashlib
+import logging
 import os
 import sys
 
 import pandas as pd
 import scanpy as sc
-from harness_bridge import resolve_agent_config
+from harness_bridge import configure_logging, resolve_agent_config
 from msp.report import write_report_context
 
 from . import cache, publication
@@ -45,6 +46,8 @@ from .lineage import (
 from .merge import merge_back
 from .plan import DEFAULT_MIN_CELLS, plan_lineages
 
+log = logging.getLogger(__name__)
+
 parser = argparse.ArgumentParser(prog="zmip", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument("h5ad", help="msp annotated.h5ad (survivors with msp_ann_coarse/msp_ann_fine)")
@@ -64,6 +67,7 @@ parser.add_argument("--report-context", default=None, metavar="TEXT",
                     help='where this run sits, for report titles (e.g. "round 2 · fu2022-meniscus")')
 parser.add_argument("--force", action="store_true")
 args = parser.parse_args()
+configure_logging("zmip", "msp")
 try:
     args.resolutions = validate_resolutions(args.resolutions)
     harmony_kwargs = parse_harmony(args.harmony)
@@ -101,7 +105,7 @@ with cache.lock_run(out):
     for c in (args.coarse_col, args.fine_col):
         if c not in ad.obs:
             sys.exit(f"obs[{c!r}] missing — input must be msp's annotated.h5ad (or pass --coarse-col/--fine-col)")
-    print(f"== {ad.n_obs} cells, batch={batch_col!r}, species={species}", flush=True)
+    log.info(f"== {ad.n_obs} cells, batch={batch_col!r}, species={species}")
 
     plan = plan_lineages(ad, args.coarse_col, batch_col, out, min_cells=args.min_cells, species=species,
                          model=args.model, effort=args.effort,
@@ -110,7 +114,7 @@ with cache.lock_run(out):
     label_to_lineage = {lab: ln["name"] for ln in plan["lineages"] for lab in ln["coarse_labels"]}
     ad.obs["_zmip_lineage"] = ad.obs[args.coarse_col].astype(str).map(label_to_lineage).astype("category")
     for ln in plan["lineages"]:
-        print(f"== lineage {ln['name']}: {ln['coarse_labels']} n={ln['n_cells']} zoom={ln['zoom']}", flush=True)
+        log.info(f"== lineage {ln['name']}: {ln['coarse_labels']} n={ln['n_cells']} zoom={ln['zoom']}")
 
     markers_p = os.path.join(out, "lineage_markers.csv")
     zoomed = [ln for ln in plan["lineages"] if ln["zoom"]]
@@ -122,14 +126,14 @@ with cache.lock_run(out):
         except pd.errors.EmptyDataError:  # a half-written/empty file from an interrupted run: recompute
             mk = None
     if not zoomed:
-        print("== no lineage selected for zoom — skipping markers and passing msp labels through", flush=True)
+        log.info("== no lineage selected for zoom — skipping markers and passing msp labels through")
         # Keep the existing CSV contract even when no marker computation is needed.
         pd.DataFrame(columns=MARKER_COLUMNS).to_csv(markers_p, index=False)
         markers = {}
     elif mk is not None:
         markers = {g: mk.loc[mk["lineage"] == g, "gene"].tolist() for g in mk["lineage"].unique()}
     else:
-        print("== lineage-level markers (for foreign-lineage scores)", flush=True)
+        log.info("== lineage-level markers (for foreign-lineage scores)")
         markers = lineage_markers(ad, "_zmip_lineage", out)
 
     cache.seal(out, "markers", marker_generation, ["lineage_markers.csv"])
@@ -144,7 +148,7 @@ with cache.lock_run(out):
     for ln in zoomed:
         d = lineage_dir(out, ln["name"])
         if contract_done(d) and not args.force:
-            print(f"== [{ln['name']}] already done — skipping (resume)", flush=True)
+            log.info(f"== [{ln['name']}] already done — skipping (resume)")
             results[ln["name"]] = load_result(d)
         else:
             todo.append(ln)
@@ -174,4 +178,4 @@ with cache.lock_run(out):
                                              coarse_col=args.coarse_col, fine_col=args.fine_col))
 
     merge_back(ad, plan, results, out, coarse_col=args.coarse_col, fine_col=args.fine_col, with_report=True)
-    print(f"== report: {os.path.join(out, 'report.html')}", flush=True)
+    log.info(f"== report: {os.path.join(out, 'report.html')}")

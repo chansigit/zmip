@@ -14,6 +14,7 @@ the input already carries.
 Archives: zmip_removed.csv / zmip_reassigned.csv (every cell, with sources).
 """
 
+import logging
 import os
 
 import matplotlib
@@ -27,6 +28,8 @@ from msp.annotate import _palette
 from msp.plots import UMAP_DPI, save_single_umap, umap_axes
 
 from . import publication
+
+log = logging.getLogger(__name__)
 
 
 def _validate_partition(name, expected, survivors, removed, reassigned):
@@ -182,8 +185,8 @@ def merge_back(ad, plan, results, outdir, coarse_col="msp_ann_coarse", fine_col=
             if not (stage / "report.html").is_file():
                 raise ValueError("global report was not written")
         publication.publish(outdir, stage)
-    print(f"== merged: removed {int(removed.sum())}, reassigned {len(ra_all)}, "
-          f"annotated_zmip.h5ad keeps {kept.n_obs}/{ad.n_obs}", flush=True)
+    log.info(f"== merged: removed {int(removed.sum())}, reassigned {len(ra_all)}, "
+          f"annotated_zmip.h5ad keeps {kept.n_obs}/{ad.n_obs}")
     return kept, rm_all, ra_all
 
 
