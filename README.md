@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="zmip — zoom-in pipeline" width="640">
+</p>
+
 # zmip — zoom-in pipeline
 
 The round after [msp](https://github.com/chansigit/msp): take msp's

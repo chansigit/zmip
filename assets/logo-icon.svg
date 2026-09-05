@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">zmip icon</title>
+  <desc id="desc">A mint Z inside a focus ring, with mint and coral cell clusters on a dark teal field.</desc>
+  <rect width="256" height="256" rx="60" fill="#142D36"/>
+  <!-- The outer ring keeps the local analysis in its global context. -->
+  <circle cx="128" cy="128" r="99" fill="none" stroke="#52727A" stroke-width="3"/>
+  <!-- Z: zoom into a lineage, then return the refined result. -->
+  <path d="M68 75H185L71 181H188" fill="none" stroke="#62DFBE" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Two locally resolved cell groups; not a literal embedding. -->
+  <g fill="#62DFBE">
+    <circle cx="71" cy="120" r="8"/>
+    <circle cx="61" cy="143" r="6"/>
+    <circle cx="86" cy="140" r="7"/>
+  </g>
+  <g fill="#FF9D82">
+    <circle cx="173" cy="117" r="9"/>
+    <circle cx="195" cy="128" r="6"/>
+    <circle cx="176" cy="142" r="7"/>
+  </g>
+</svg>
