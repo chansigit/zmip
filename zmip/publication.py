@@ -5,13 +5,13 @@ window; the completion receipt is replaced last. Recovery restores the old set
 from immutable backups before another writer or report reader proceeds.
 """
 
-from contextlib import contextmanager
 import json
 import logging
 import os
-from pathlib import Path
 import shutil
 import tempfile
+from contextlib import contextmanager
+from pathlib import Path
 
 from . import cache
 
@@ -30,10 +30,13 @@ def generation(outdir):
         from .lineage import lineage_dir
 
         plan = json.loads(plan_path.read_text())
-        dependencies += [Path(lineage_dir(root, ln["name"])) / ".zmip-complete.json"
-                         for ln in plan["lineages"] if ln["zoom"]]
-    return {"run_id": cache.run_id(root), "dependencies": {
-        str(p.relative_to(root)): cache.file_digest(p) for p in dependencies if p.exists()}}
+        dependencies += [
+            Path(lineage_dir(root, ln["name"])) / ".zmip-complete.json" for ln in plan["lineages"] if ln["zoom"]
+        ]
+    return {
+        "run_id": cache.run_id(root),
+        "dependencies": {str(p.relative_to(root)): cache.file_digest(p) for p in dependencies if p.exists()},
+    }
 
 
 def complete(outdir, *, check_report=True):
@@ -43,17 +46,25 @@ def complete(outdir, *, check_report=True):
     try:
         receipt = json.loads((root / RECEIPT).read_text())
         files = receipt["files"]
-        return (receipt["run_id"] == generation(root) and set(DATA_FILES).issubset(files)
-                and all(cache.file_digest(root / name) == digest for name, digest in files.items()
-                        if check_report or name != "report.html"))
+        return (
+            receipt["run_id"] == generation(root)
+            and set(DATA_FILES).issubset(files)
+            and all(
+                cache.file_digest(root / name) == digest
+                for name, digest in files.items()
+                if check_report or name != "report.html"
+            )
+        )
     except (OSError, ValueError, TypeError, KeyError):
         return False
 
 
 def require_complete(outdir):
     if not complete(outdir, check_report=False):
-        raise RuntimeError("global output is incomplete, changed or belongs to an earlier run; "
-                           "rerun zmip to recover/merge before rebuilding its report")
+        raise RuntimeError(
+            "global output is incomplete, changed or belongs to an earlier run; "
+            "rerun zmip to recover/merge before rebuilding its report"
+        )
 
 
 def _copy_snapshot(source, target):
@@ -120,16 +131,14 @@ def publish(outdir, stage):
     cache.seal(stage, "global", generation(root), files)
     # Include obsolete global figures so a previous run cannot leak into the new set.
     old = {p.relative_to(root).as_posix() for p in (root / "figures").glob("zmip_*.png")}
-    old |= {name for name in (*DATA_FILES, "zmip_fine_legend.csv", "report.html", RECEIPT)
-            if (root / name).exists()}
+    old |= {name for name in (*DATA_FILES, "zmip_fine_legend.csv", "report.html", RECEIPT) if (root / name).exists()}
     names = sorted(set(files) | old | {RECEIPT})
     transaction = stage.parent
     previous = {name: (root / name).exists() for name in names}
     for name in names:
         if previous[name]:
             _copy_snapshot(root / name, transaction / "backup" / name)
-    cache.write_json(root / JOURNAL, {"transaction": transaction.relative_to(root).as_posix(),
-                                     "previous": previous})
+    cache.write_json(root / JOURNAL, {"transaction": transaction.relative_to(root).as_posix(), "previous": previous})
     try:
         for name in [n for n in names if n != RECEIPT] + [RECEIPT]:
             target = root / name

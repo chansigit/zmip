@@ -25,23 +25,46 @@ plan_module = importlib.import_module("zmip.plan")
 
 @pytest.fixture
 def merge_case(tmp_path, monkeypatch):
-    obs = pd.DataFrame({"msp_ann_coarse": pd.Categorical(["A", "A", "B"]),
-                        "msp_ann_fine": pd.Categorical(["old A", "old A", "old B"])},
-                       index=["001", "002", "NA"])
+    obs = pd.DataFrame(
+        {
+            "msp_ann_coarse": pd.Categorical(["A", "A", "B"]),
+            "msp_ann_fine": pd.Categorical(["old A", "old A", "old B"]),
+        },
+        index=["001", "002", "NA"],
+    )
     ad = AnnData(np.arange(6, dtype="float32").reshape(3, 2), obs=obs)
     ad.layers["counts"] = ad.X.copy()
     ad.raw = ad
     ad.uns["audit"] = "original"
-    plan = {"lineages": [{"name": "A", "coarse_labels": ["A"], "zoom": True},
-                          {"name": "B", "coarse_labels": ["B"], "zoom": False}]}
+    plan = {
+        "lineages": [
+            {"name": "A", "coarse_labels": ["A"], "zoom": True},
+            {"name": "B", "coarse_labels": ["B"], "zoom": False},
+        ]
+    }
     # Categorical like the real lineage output (annotate._apply); anndata keeps the dtype on disk.
-    survivors = pd.DataFrame({"msp_ann_cluster": pd.Categorical(["0"]), "msp_ann_coarse": pd.Categorical(["B"]),
-                               "msp_ann_fine": pd.Categorical(["new B"]),
-                               "zmip_reassigned_to": pd.Categorical(["B"])}, index=["001"])
-    removed = pd.DataFrame({"cell": ["002"], "lineage": ["A"], "cluster": ["1"],
-                            "preannotation": [False], "annotate_remove": [True], "remove_reason": ["doublet"]})
-    reassigned = pd.DataFrame({"cell": ["001"], "lineage": ["A"], "cluster": ["0"],
-                               "reassign_to": ["B"], "fine_label": ["new B"]})
+    survivors = pd.DataFrame(
+        {
+            "msp_ann_cluster": pd.Categorical(["0"]),
+            "msp_ann_coarse": pd.Categorical(["B"]),
+            "msp_ann_fine": pd.Categorical(["new B"]),
+            "zmip_reassigned_to": pd.Categorical(["B"]),
+        },
+        index=["001"],
+    )
+    removed = pd.DataFrame(
+        {
+            "cell": ["002"],
+            "lineage": ["A"],
+            "cluster": ["1"],
+            "preannotation": [False],
+            "annotate_remove": [True],
+            "remove_reason": ["doublet"],
+        }
+    )
+    reassigned = pd.DataFrame(
+        {"cell": ["001"], "lineage": ["A"], "cluster": ["0"], "reassign_to": ["B"], "fine_label": ["new B"]}
+    )
     monkeypatch.setattr(merge, "_figures", lambda *args: None)
     return ad, plan, survivors, removed, reassigned
 
@@ -77,8 +100,9 @@ def test_merge_preserves_counts_audit_and_reassignment(merge_case, tmp_path):
     pd.testing.assert_frame_equal(ra, reassigned)
 
 
-@pytest.mark.parametrize("problem", ["missing_csv", "extra_csv", "target", "fine", "cluster",
-                                      "unknown_target", "same_lineage", "coarse"])
+@pytest.mark.parametrize(
+    "problem", ["missing_csv", "extra_csv", "target", "fine", "cluster", "unknown_target", "same_lineage", "coarse"]
+)
 def test_merge_rejects_inconsistent_reassignment_decisions(merge_case, tmp_path, problem):
     ad, plan, survivors, removed, reassigned = merge_case
     if problem == "missing_csv":
@@ -106,13 +130,23 @@ def test_apply_output_survives_h5ad_round_trip_validation(tmp_path):
     category sets on disk; validation must compare them as text, not as categoricals."""
     from zmip.annotate import _apply
 
-    ad = AnnData(np.ones((4, 2), dtype="float32"),
-                 obs=pd.DataFrame({"cl": pd.Categorical(["0", "0", "1", "1"])}, index=["c1", "c2", "c3", "c4"]))
-    proposal = {"clusters": [
-        dict(cluster_id="0", coarse_label="A", fine_label="A fine", merge_target=None, action="keep"),
-        dict(cluster_id="1", coarse_label="B", fine_label="B fine", merge_target=None, action="reassign",
-             reassign_to="B"),
-    ]}
+    ad = AnnData(
+        np.ones((4, 2), dtype="float32"),
+        obs=pd.DataFrame({"cl": pd.Categorical(["0", "0", "1", "1"])}, index=["c1", "c2", "c3", "c4"]),
+    )
+    proposal = {
+        "clusters": [
+            dict(cluster_id="0", coarse_label="A", fine_label="A fine", merge_target=None, action="keep"),
+            dict(
+                cluster_id="1",
+                coarse_label="B",
+                fine_label="B fine",
+                merge_target=None,
+                action="reassign",
+                reassign_to="B",
+            ),
+        ]
+    }
     removed, reassigned = _apply(ad, "cl", proposal, np.array([False, True, False, False]), "L")
     kept = ad[(ad.obs["msp_ann_action"] == "keep").values].copy()
     kept.write_h5ad(tmp_path / "annotated.h5ad")
@@ -171,9 +205,21 @@ def test_report_failure_does_not_publish_new_data(merge_case, tmp_path, monkeypa
     assert all((tmp_path / name).read_bytes() == b"old complete output" for name in names)
 
 
-@pytest.mark.parametrize("problem", ["missing", "overlap", "duplicate_kept", "duplicate_removed",
-                                      "foreign_kept", "foreign_removed", "duplicate_reassigned",
-                                      "removed_reassigned", "wrong_source", "foreign_reassigned"])
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "missing",
+        "overlap",
+        "duplicate_kept",
+        "duplicate_removed",
+        "foreign_kept",
+        "foreign_removed",
+        "duplicate_reassigned",
+        "removed_reassigned",
+        "wrong_source",
+        "foreign_reassigned",
+    ],
+)
 def test_invalid_partition_does_not_publish_or_mutate(merge_case, tmp_path, problem):
     ad, plan, survivors, removed, reassigned = merge_case
     if problem == "missing":
@@ -207,8 +253,10 @@ def test_invalid_partition_does_not_publish_or_mutate(merge_case, tmp_path, prob
     assert all(path.read_bytes() == b"previous completed output" for path in paths)
 
 
-@pytest.mark.parametrize("problem", ["missing_result", "extra_result", "duplicate_input",
-                                      "duplicate_label", "duplicate_lineage", "unassigned_label"])
+@pytest.mark.parametrize(
+    "problem",
+    ["missing_result", "extra_result", "duplicate_input", "duplicate_label", "duplicate_lineage", "unassigned_label"],
+)
 def test_merge_rejects_invalid_global_coverage_before_reading(merge_case, tmp_path, monkeypatch, problem):
     ad, plan, *_ = merge_case
     results = {"A": {}}
@@ -230,16 +278,27 @@ def test_merge_rejects_invalid_global_coverage_before_reading(merge_case, tmp_pa
     assert not (tmp_path / "annotated_zmip.h5ad").exists()
 
 
-@pytest.mark.parametrize("values", [[], [1.0], [2.0], [0.3], [1., 2., 2.],
-                                     [1., 2., 0.], [1., 2., -1.], [1., 2., float("nan")],
-                                     [1., 2., float("inf")]])
+@pytest.mark.parametrize(
+    "values",
+    [
+        [],
+        [1.0],
+        [2.0],
+        [0.3],
+        [1.0, 2.0, 2.0],
+        [1.0, 2.0, 0.0],
+        [1.0, 2.0, -1.0],
+        [1.0, 2.0, float("nan")],
+        [1.0, 2.0, float("inf")],
+    ],
+)
 def test_resolution_preflight_rejects_missing_or_invalid_values(values):
     with pytest.raises(ValueError, match="--resolutions"):
         validate_resolutions(values)
 
 
 def test_resolution_preflight_preserves_valid_custom_order():
-    assert validate_resolutions([2, 0.7, 1]) == (2., 0.7, 1.)
+    assert validate_resolutions([2, 0.7, 1]) == (2.0, 0.7, 1.0)
 
 
 @pytest.mark.parametrize("module", ["zmip", "zmip.lineage"])
@@ -248,8 +307,19 @@ def test_cli_rejects_missing_resolution_before_opening_input(module, tmp_path, m
     if module == "zmip":
         argv = [module, "missing.h5ad", "--outdir", outdir, "--resolutions", "1.0"]
     else:
-        argv = [module, outdir, "A", "--subset", "missing.h5ad", "--h5ad", "missing.h5ad",
-                "--batch-col", "sample", "--resolutions", "1.0"]
+        argv = [
+            module,
+            outdir,
+            "A",
+            "--subset",
+            "missing.h5ad",
+            "--h5ad",
+            "missing.h5ad",
+            "--batch-col",
+            "sample",
+            "--resolutions",
+            "1.0",
+        ]
     monkeypatch.setattr(sys, "argv", argv)
     monkeypatch.setattr(sc, "read_h5ad", lambda *a, **k: pytest.fail("must reject before reading input"))
     with pytest.raises(SystemExit) as exc:
@@ -266,7 +336,7 @@ def marker_input(groups):
     n = len(groups)
     x = np.zeros((n, 3), dtype="float32")
     for i, group in enumerate(groups):
-        x[i, {"A": 0, "B": 1, "tiny": 2}[group]] = np.log1p(10.)
+        x[i, {"A": 0, "B": 1, "tiny": 2}[group]] = np.log1p(10.0)
     ad = AnnData(x, obs=pd.DataFrame({"lineage": pd.Categorical(groups)}, index=[f"c{i}" for i in range(n)]))
     ad.layers["counts"] = np.expm1(x)
     ad.raw = ad
@@ -312,7 +382,7 @@ def test_singleton_skipped_but_retained_in_reference(tmp_path, monkeypatch, capl
 def test_no_eligible_markers_writes_header_without_running_scanpy(tmp_path, monkeypatch, groups):
     monkeypatch.setattr(sc.tl, "rank_genes_groups", lambda *a, **k: pytest.fail("no eligible comparisons"))
     markers = lineage_markers(marker_input(groups), "lineage", tmp_path)
-    assert markers == dict.fromkeys(groups, [])
+    assert markers == {group: [] for group in groups}
     table = pd.read_csv(tmp_path / "lineage_markers.csv")
     assert table.empty and list(table) == MARKER_COLUMNS
 
@@ -327,13 +397,18 @@ def test_no_zoom_cli_skips_markers_and_preserves_output_contract(merge_case, tmp
     ad.write_h5ad(input_path)
     outdir = tmp_path / "out"
     original = ad.copy()
+
     def fake_plan(*args, **kwargs):
         (outdir / "zmip_plan.json").write_text(json.dumps(plan))
         return copy.deepcopy(plan)
 
     monkeypatch.setattr(plan_module, "plan_lineages", fake_plan)
     monkeypatch.setattr(foreign, "lineage_markers", lambda *a, **k: pytest.fail("markers are unnecessary"))
-    monkeypatch.setattr(importlib.import_module("zmip.report"), "generate_report", lambda *a, out_html=None, **k: Path(out_html).write_text("<html>test report</html>"))
+    monkeypatch.setattr(
+        importlib.import_module("zmip.report"),
+        "generate_report",
+        lambda *a, out_html=None, **k: Path(out_html).write_text("<html>test report</html>"),
+    )
     monkeypatch.setattr(sys, "argv", ["zmip", str(input_path), "--outdir", str(outdir)])
     runpy.run_module("zmip", run_name="__main__")
     output = sc.read_h5ad(outdir / "annotated_zmip.h5ad")

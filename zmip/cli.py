@@ -6,8 +6,13 @@ def add_integration_options(parser):
     parser.add_argument("--n-top-genes", type=int, default=2000)
     parser.add_argument("--n-pcs", type=int, default=50)
     parser.add_argument("--n-neighbors", type=int, default=15)
-    parser.add_argument("--harmony", action="append", default=[], metavar="KEY=VALUE",
-                        help="harmonypy override for the per-lineage re-embedding, repeatable")
+    parser.add_argument(
+        "--harmony",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="harmonypy override for the per-lineage re-embedding, repeatable",
+    )
 
 
 def parse_harmony(items):

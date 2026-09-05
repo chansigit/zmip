@@ -63,8 +63,9 @@ def prepare_run(outdir, input_path, options, force=False, agent=None):
             except (ValueError, OSError) as exc:
                 raise ValueError("invalid resume record; use a new output directory or --force") from exc
             if not isinstance(previous, dict) or previous.get("identity") != identity or not previous.get("run_id"):
-                raise ValueError("input or options changed, or runtime/code changed; "
-                                 "use a new output directory or --force")
+                raise ValueError(
+                    "input or options changed, or runtime/code changed; use a new output directory or --force"
+                )
             if agent is not None and previous.get("agent") != agent:
                 write_json(path, {**previous, "agent": agent})
             return previous["run_id"]
@@ -86,15 +87,22 @@ def invalidate(outdir, stage):
 
 def seal(outdir, stage, generation, files):
     """Publish completion only after all files have been successfully written."""
-    write_json(Path(outdir) / f".zmip-{stage}.json", {
-        "run_id": generation, "files": {name: file_digest(Path(outdir) / name) for name in files},
-    })
+    write_json(
+        Path(outdir) / f".zmip-{stage}.json",
+        {
+            "run_id": generation,
+            "files": {name: file_digest(Path(outdir) / name) for name in files},
+        },
+    )
 
 
 def valid(outdir, stage, generation, files):
     try:
         receipt = json.loads((Path(outdir) / f".zmip-{stage}.json").read_text())
-        return (receipt["run_id"] == generation and set(receipt["files"]) == set(files)
-                and all(file_digest(Path(outdir) / name) == receipt["files"][name] for name in files))
+        return (
+            receipt["run_id"] == generation
+            and set(receipt["files"]) == set(files)
+            and all(file_digest(Path(outdir) / name) == receipt["files"][name] for name in files)
+        )
     except (OSError, ValueError, KeyError, TypeError):
         return False

@@ -37,21 +37,22 @@ MARKER_COLUMNS = ["lineage", "rank", "gene", "logFC", "pct_in", "pct_out"]
 def lineage_markers(ad, lineage_col, outdir, top_n=TOP_N):
     """One marker list per lineage (all lineages, zoomed or not — a skipped
     tiny lineage is still something a zoomed one can be contaminated by)."""
-    groups = [g for g in ad.obs[lineage_col].astype(str).unique()]
+    groups = list(ad.obs[lineage_col].astype(str).unique())
     sizes = ad.obs[lineage_col].astype(str).value_counts()
     eligible = []
     for g in groups:
         n_group, n_rest = int(sizes[g]), ad.n_obs - int(sizes[g])
         if min(n_group, n_rest) < 2:
-            log.warning(f"== lineage {g!r}: cannot estimate markers with {n_group} lineage cell(s) and "
-                  f"{n_rest} reference cell(s); need at least 2 each — no foreign score for it")
+            log.warning(
+                f"== lineage {g!r}: cannot estimate markers with {n_group} lineage cell(s) and "
+                f"{n_rest} reference cell(s); need at least 2 each — no foreign score for it"
+            )
         else:
             eligible.append(g)
     # Exclude tiny groups from testing, not from the other groups' reference cells.
     if eligible:
         # Ranking needs X and the grouping only, not raw/counts, graphs or embeddings.
-        tmp = AnnData(X=ad.X, obs=ad.obs[[lineage_col]].copy(),
-                      var=pd.DataFrame(index=ad.var_names.copy()))
+        tmp = AnnData(X=ad.X, obs=ad.obs[[lineage_col]].copy(), var=pd.DataFrame(index=ad.var_names.copy()))
         if "log1p" in ad.uns:
             tmp.uns["log1p"] = dict(ad.uns["log1p"])
         sc.tl.rank_genes_groups(tmp, lineage_col, groups=eligible, method="wilcoxon", use_raw=False, pts=True)
@@ -61,8 +62,16 @@ def lineage_markers(ad, lineage_col, outdir, top_n=TOP_N):
         df = df.rename(columns={"pct_nz_group": "pct_in", "pct_nz_reference": "pct_out"})
         df = df[(df["logfoldchanges"] > 0) & (df["pct_out"] < MAX_PCT_OUT)].head(top_n)
         for rank, r in enumerate(df.itertuples(index=False), 1):
-            rows.append({"lineage": g, "rank": rank, "gene": r.names, "logFC": float(r.logfoldchanges),
-                         "pct_in": float(r.pct_in), "pct_out": float(r.pct_out)})
+            rows.append(
+                {
+                    "lineage": g,
+                    "rank": rank,
+                    "gene": r.names,
+                    "logFC": float(r.logfoldchanges),
+                    "pct_in": float(r.pct_in),
+                    "pct_out": float(r.pct_out),
+                }
+            )
     # explicit columns: a run where no gene passes the pct_out filter for any
     # lineage (tiny/synthetic data, or one lineage swamping the rest) must
     # still yield an empty-but-well-formed table, not a KeyError below
@@ -98,11 +107,17 @@ def score_foreign(sub, markers, own_lineage, cluster_keys, outdir, figdir):
         parts = []
         for col in cols:
             hi = np.quantile(sub.obs[col], 0.99)
-            parts.append(pd.DataFrame({
-                f"{col}_mean": g[col].mean().round(3),
-                f"{col}_p90": g[col].quantile(0.9).round(3),
-                f"{col}_frac_top1pct": g[col].apply(lambda s: float((s > hi).mean())).round(3),
-            }))
+            parts.append(
+                pd.DataFrame(
+                    {
+                        f"{col}_mean": g[col].mean().round(3),
+                        f"{col}_p90": g[col].quantile(0.9).round(3),
+                        f"{col}_frac_top1pct": g[col]
+                        .apply(lambda s, threshold=hi: float((s > threshold).mean()))
+                        .round(3),
+                    }
+                )
+            )
         tab = pd.concat(parts, axis=1)
         tab.insert(0, "n_cells", g.size())
         tab.to_csv(os.path.join(outdir, f"foreign_signal_{key}.csv"))

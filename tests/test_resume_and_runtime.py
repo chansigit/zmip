@@ -32,17 +32,17 @@ def test_resume_checks_input_contents_options_and_legacy_outputs(tmp_path):
     source = tmp_path / "input.h5ad"
     source.write_bytes(b"first input")
     root = tmp_path / "out"
-    generation = cache.prepare_run(root, source, {"resolutions": (1., 2.)})
-    assert cache.prepare_run(root, source, {"resolutions": [1., 2.]}) == generation
+    generation = cache.prepare_run(root, source, {"resolutions": (1.0, 2.0)})
+    assert cache.prepare_run(root, source, {"resolutions": [1.0, 2.0]}) == generation
     # Agent settings are audit information: refreshed, never compared.
-    assert cache.prepare_run(root, source, {"resolutions": [1., 2.]}, agent={"max_turns": 80}) == generation
+    assert cache.prepare_run(root, source, {"resolutions": [1.0, 2.0]}, agent={"max_turns": 80}) == generation
     assert json.loads((root / ".zmip-run.json").read_text())["agent"] == {"max_turns": 80}
     source.write_bytes(b"other input")
     with pytest.raises(ValueError, match="input or options changed"):
-        cache.prepare_run(root, source, {"resolutions": [1., 2.]})
+        cache.prepare_run(root, source, {"resolutions": [1.0, 2.0]})
     source.write_bytes(b"first input")
     with pytest.raises(ValueError, match="input or options changed"):
-        cache.prepare_run(root, source, {"resolutions": [0.3, 1., 2.]})
+        cache.prepare_run(root, source, {"resolutions": [0.3, 1.0, 2.0]})
     (root / ".zmip-run.json").unlink()
     (root / "zmip_plan.json").write_text("{}")
     with pytest.raises(ValueError, match="legacy"):
@@ -64,21 +64,21 @@ def test_receipts_reject_tampering_missing_files_and_new_generation(tmp_path):
 
 
 def test_output_lock_rejects_a_second_writer_and_releases_on_failure(tmp_path):
-    with pytest.raises(ValueError, match="interrupted"):
-        with cache.lock_run(tmp_path):
-            with pytest.raises(RuntimeError, match="another zmip run"):
-                with cache.lock_run(tmp_path):
-                    pytest.fail("second writer acquired lock")
-            raise ValueError("interrupted")
+    with pytest.raises(ValueError, match="interrupted"), cache.lock_run(tmp_path):
+        with pytest.raises(RuntimeError, match="another zmip run"), cache.lock_run(tmp_path):
+            pytest.fail("second writer acquired lock")
+        raise ValueError("interrupted")
     with cache.lock_run(tmp_path):
         pass
 
 
 def test_plan_force_recomputes_and_resume_revalidates(tmp_path, monkeypatch):
     counts = pd.DataFrame({"n_cells": [1000, 1000]}, index=["A", "B"])
-    shared = pd.DataFrame({"island_1": [100., 100.]}, index=["A", "B"])
-    candidate = {"lineages": [{"name": label, "coarse_labels": [label], "zoom": True}
-                              for label in counts.index], "confirm_shared_islands": True}
+    shared = pd.DataFrame({"island_1": [100.0, 100.0]}, index=["A", "B"])
+    candidate = {
+        "lineages": [{"name": label, "coarse_labels": [label], "zoom": True} for label in counts.index],
+        "confirm_shared_islands": True,
+    }
     calls = []
 
     async def fake_agent(*args):
@@ -99,8 +99,7 @@ def test_plan_force_recomputes_and_resume_revalidates(tmp_path, monkeypatch):
 
 
 def test_lineage_completion_is_invalidated_before_failed_rerun(tmp_path, monkeypatch):
-    sub = AnnData(np.ones((2, 2), dtype="float32"),
-                  obs=pd.DataFrame(index=["001", "NA"]))
+    sub = AnnData(np.ones((2, 2), dtype="float32"), obs=pd.DataFrame(index=["001", "NA"]))
     sub.obs["msp_ann_cluster"] = "0"
     sub.obs["msp_ann_coarse"] = "A"
     sub.obs["msp_ann_fine"] = "type A"
@@ -119,13 +118,26 @@ def test_lineage_completion_is_invalidated_before_failed_rerun(tmp_path, monkeyp
         (root / "report.html").write_text("<html>complete</html>")
         pd.DataFrame(columns=["cell", "lineage", "cluster"]).to_csv(root / "annotation_removed.csv", index=False)
         pd.DataFrame(columns=["cell", "lineage", "cluster", "reassign_to", "fine_label"]).to_csv(
-            root / "annotation_reassigned.csv", index=False)
+            root / "annotation_reassigned.csv", index=False
+        )
 
     monkeypatch.setattr(lineage, "annotate_lineage", fake_annotate)
     args = (sub, "A", ["A"], ["A"], {}, str(tmp_path))
-    kwargs = dict(batch_col="sample", species=None, h5ad_path="input.h5ad", resolutions=[1., 2.],
-                  n_top_genes=2, n_pcs=1, n_neighbors=1, harmony_kwargs={}, keys_for_foreign=[],
-                  language="English", model="test", effort=None, max_turns=1)
+    kwargs = dict(
+        batch_col="sample",
+        species=None,
+        h5ad_path="input.h5ad",
+        resolutions=[1.0, 2.0],
+        n_top_genes=2,
+        n_pcs=1,
+        n_neighbors=1,
+        harmony_kwargs={},
+        keys_for_foreign=[],
+        language="English",
+        model="test",
+        effort=None,
+        max_turns=1,
+    )
     lineage.run_lineage(*args, **kwargs)
     root = tmp_path / "A"
     assert lineage.contract_done(root)
@@ -170,8 +182,9 @@ def test_pool_cleans_launched_process_on_parent_failure(tmp_path, monkeypatch, f
     todo = [{"name": n, "coarse_labels": [n], "n_cells": 10} for n in ("A", "B")]
     try:
         with pytest.raises(SystemExit if failure == "SIGTERM" else type(failure)):
-            lineage.run_lineages_parallel(None, todo, {"A", "B"}, str(tmp_path), [],
-                                          coarse_col="coarse", fine_col="fine")
+            lineage.run_lineages_parallel(
+                None, todo, {"A", "B"}, str(tmp_path), [], coarse_col="coarse", fine_col="fine"
+            )
         assert len(processes) == 1
         assert processes[0].poll() is not None and processes[0].stdout.closed
         assert signal.getsignal(signal.SIGTERM) == original_term
@@ -202,8 +215,9 @@ def test_pool_reaps_logs_and_allows_independent_lineage_to_finish(tmp_path, monk
     todo = [{"name": n, "coarse_labels": [n], "n_cells": 10} for n in ("A", "B")]
 
     def run():
-        return lineage.run_lineages_parallel(None, todo, {"A", "B"}, str(tmp_path), [],
-                                             coarse_col="coarse", fine_col="fine")
+        return lineage.run_lineages_parallel(
+            None, todo, {"A", "B"}, str(tmp_path), [], coarse_col="coarse", fine_col="fine"
+        )
 
     with caplog.at_level(logging.INFO, logger="zmip"):
         if first_exit:
@@ -221,9 +235,10 @@ def test_check_deg_accepts_subcluster_ids_and_reports_ambiguous_pools(tmp_path, 
     import harness_bridge
 
     labels = ["0", "5", "1", "5,0", "5,1"]
-    ad = AnnData(np.log1p(np.random.default_rng(0).poisson(3, (20, 4))).astype("float32"),
-                 obs=pd.DataFrame({annotate.BASE_KEY: pd.Categorical(np.repeat(labels, 4))},
-                                  index=[f"c{i}" for i in range(20)]))
+    ad = AnnData(
+        np.log1p(np.random.default_rng(0).poisson(3, (20, 4))).astype("float32"),
+        obs=pd.DataFrame({annotate.BASE_KEY: pd.Categorical(np.repeat(labels, 4))}, index=[f"c{i}" for i in range(20)]),
+    )
     ad.raw = ad
     caches = []
     real_cache = annotate.DegCache
@@ -246,22 +261,46 @@ def test_check_deg_accepts_subcluster_ids_and_reports_ambiguous_pools(tmp_path, 
     monkeypatch.setattr(annotate, "DegCache", capture_cache)
     monkeypatch.setattr(harness_bridge, "run_agent", fake_agent)
     monkeypatch.setattr(annotate, "_system_prompt", lambda *a: "test")
-    asyncio.run(annotate._run_agent(ad, str(tmp_path), "A", ["A"], ["B"], "sample", None, [], {},
-                                    np.zeros(20, dtype=bool), [], [], "English", "test", None, 1))
+    asyncio.run(
+        annotate._run_agent(
+            ad,
+            str(tmp_path),
+            "A",
+            ["A"],
+            ["B"],
+            "sample",
+            None,
+            [],
+            {},
+            np.zeros(20, dtype=bool),
+            [],
+            [],
+            "English",
+            "test",
+            None,
+            1,
+        )
+    )
     assert (annotate.BASE_KEY, "0", ("5,1",)) in caches[0]._memo
     assert (annotate.BASE_KEY, "0", ("5,0", "5,1")) in caches[0]._memo
 
 
 def test_graph_only_paga_matches_full_object_without_mutation(tmp_path, monkeypatch):
     n = 12
-    ad = AnnData(np.ones((n, 3), dtype="float32"),
-                 obs=pd.DataFrame({"coarse": pd.Categorical(["A"] * 6 + ["B"] * 6), "sample": "s"},
-                                  index=[f"c{i}" for i in range(n)]))
+    ad = AnnData(
+        np.ones((n, 3), dtype="float32"),
+        obs=pd.DataFrame(
+            {"coarse": pd.Categorical(["A"] * 6 + ["B"] * 6), "sample": "s"}, index=[f"c{i}" for i in range(n)]
+        ),
+    )
     graph = sparse.csr_matrix(np.ones((n, n)) - np.eye(n))
     ad.obsp["connectivities"] = graph
     ad.obsp["distances"] = graph.copy()
-    ad.uns["neighbors"] = {"connectivities_key": "connectivities", "distances_key": "distances",
-                           "params": {"n_neighbors": 5}}
+    ad.uns["neighbors"] = {
+        "connectivities_key": "connectivities",
+        "distances_key": "distances",
+        "params": {"n_neighbors": 5},
+    }
     ad.layers["counts"] = ad.X.copy()
     ad.raw = ad
     original_obs, original_uns = ad.obs.copy(), copy.deepcopy(ad.uns)
@@ -292,10 +331,17 @@ def test_cli_resume_reruns_only_damaged_lineage_and_force_replans(tmp_path, monk
     merge = importlib.import_module("zmip.merge")
     report = importlib.import_module("zmip.report")
     root, source = tmp_path / "out", tmp_path / "input.h5ad"
-    ad = AnnData(np.arange(12, dtype="float32").reshape(6, 2), obs=pd.DataFrame({
-        "msp_ann_coarse": pd.Categorical(["A"] * 3 + ["B"] * 3),
-        "msp_ann_fine": pd.Categorical(["old A"] * 3 + ["old B"] * 3), "sample": "s",
-    }, index=["001", "002", "NA", "004", "005", "006"]))
+    ad = AnnData(
+        np.arange(12, dtype="float32").reshape(6, 2),
+        obs=pd.DataFrame(
+            {
+                "msp_ann_coarse": pd.Categorical(["A"] * 3 + ["B"] * 3),
+                "msp_ann_fine": pd.Categorical(["old A"] * 3 + ["old B"] * 3),
+                "sample": "s",
+            },
+            index=["001", "002", "NA", "004", "005", "006"],
+        ),
+    )
     ad.layers["counts"] = ad.X.copy()
     ad.uns["msp"] = {"batch_col": "sample"}
     ad.write_h5ad(source)
@@ -320,9 +366,11 @@ def test_cli_resume_reruns_only_damaged_lineage_and_force_replans(tmp_path, monk
         (Path(outdir) / "annotation_proposal.json").write_text(json.dumps({"lineage": name}))
         (Path(outdir) / "report.html").write_text("<html>complete</html>")
         pd.DataFrame(columns=["cell", "lineage", "cluster"]).to_csv(
-            Path(outdir) / "annotation_removed.csv", index=False)
+            Path(outdir) / "annotation_removed.csv", index=False
+        )
         pd.DataFrame(columns=["cell", "lineage", "cluster", "reassign_to", "fine_label"]).to_csv(
-            Path(outdir) / "annotation_reassigned.csv", index=False)
+            Path(outdir) / "annotation_reassigned.csv", index=False
+        )
 
     monkeypatch.setenv("ZMIP_PARALLEL", "1")
     monkeypatch.setattr(plan_module, "_run", fake_agent)
@@ -333,7 +381,9 @@ def test_cli_resume_reruns_only_damaged_lineage_and_force_replans(tmp_path, monk
     monkeypatch.setattr(lineage, "save_single_umap", lambda *a, **k: None)
     monkeypatch.setattr(lineage, "annotate_lineage", fake_annotate)
     monkeypatch.setattr(merge, "_figures", lambda *a: None)
-    monkeypatch.setattr(report, "generate_report", lambda *a, out_html=None, **k: Path(out_html).write_text("<html>test report</html>"))
+    monkeypatch.setattr(
+        report, "generate_report", lambda *a, out_html=None, **k: Path(out_html).write_text("<html>test report</html>")
+    )
     argv = ["zmip", str(source), "--outdir", str(root), "--min-cells", "1"]
 
     def run(force=False):

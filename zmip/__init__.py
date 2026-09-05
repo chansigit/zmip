@@ -19,5 +19,12 @@ from .merge import merge_back
 from .plan import DEFAULT_MIN_CELLS, plan_lineages, validate_plan
 from .report import generate_report
 
-__all__ = ["DEFAULT_MIN_CELLS", "generate_report", "lineage_markers", "merge_back", "plan_lineages",
-           "score_foreign", "validate_plan"]
+__all__ = [
+    "DEFAULT_MIN_CELLS",
+    "generate_report",
+    "lineage_markers",
+    "merge_back",
+    "plan_lineages",
+    "score_foreign",
+    "validate_plan",
+]

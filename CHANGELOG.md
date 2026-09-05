@@ -4,6 +4,24 @@ All notable changes to zmip. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+- GitHub Actions for Ruff lint/format, pytest with coverage reporting on Python
+  3.10 and 3.12, and importing a built wheel outside the source checkout.
+- A tracked follow-up list in `TODO.md`.
+
+### Changed
+- Prefer MSP's public annotation/evidence/report helpers, with the seven legacy
+  fallbacks isolated in `msp_compat.py` so published MSP 0.3.0 still installs.
+- Apply a project-local Ruff policy matching MSP and normalize existing code;
+  bind loop-local closure values explicitly without changing computation methods.
+- Document PyPI installation and the harmonypy 2 runtime constraint (documentation
+  changes following the 0.3.0 release).
+- Retain the legacy torch identity field in schema 1 pending an explicit migration;
+  this field does not add a torch dependency. As with any source update, the
+  source digest changes, so pre-upgrade runs require a fresh output directory.
+
 ## 0.3.0 - 2026-09-04
 
 ### Changed

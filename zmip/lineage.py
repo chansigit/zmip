@@ -26,6 +26,7 @@ parent's log line by line with a "[lineage]" prefix.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import math
@@ -64,16 +65,25 @@ def lineage_dir(outdir, name):
     return directory
 
 
-CONTRACT_FILES = ("annotation_proposal.json", "annotated.h5ad", "report.html",
-                  "annotation_removed.csv", "annotation_reassigned.csv")
+CONTRACT_FILES = (
+    "annotation_proposal.json",
+    "annotated.h5ad",
+    "report.html",
+    "annotation_removed.csv",
+    "annotation_reassigned.csv",
+)
 
 
 def _generation(outdir):
     # A lineage also depends on the exact plan and foreign-marker lists.
-    return {"run_id": cache.run_id(outdir), "dependencies": {
-        name: cache.file_digest(os.path.join(outdir, name))
-        for name in ("zmip_plan.json", "lineage_markers.csv")
-        if os.path.exists(os.path.join(outdir, name))}}
+    return {
+        "run_id": cache.run_id(outdir),
+        "dependencies": {
+            name: cache.file_digest(os.path.join(outdir, name))
+            for name in ("zmip_plan.json", "lineage_markers.csv")
+            if os.path.exists(os.path.join(outdir, name))
+        },
+    }
 
 
 def contract_done(d):
@@ -84,8 +94,11 @@ def load_result(d):
     # Converters preserve leading zeros and literal NA-like identifiers;
     # pandas still infers the removal flags as booleans.
     text_columns = dict.fromkeys(("cell", "lineage", "cluster", "reassign_to", "fine_label"), str)
-    return {"dir": d, "removed": pd.read_csv(os.path.join(d, "annotation_removed.csv"), converters=text_columns),
-            "reassigned": pd.read_csv(os.path.join(d, "annotation_reassigned.csv"), converters=text_columns)}
+    return {
+        "dir": d,
+        "removed": pd.read_csv(os.path.join(d, "annotation_removed.csv"), converters=text_columns),
+        "reassigned": pd.read_csv(os.path.join(d, "annotation_reassigned.csv"), converters=text_columns),
+    }
 
 
 def subset_for(ad, labels, coarse_col, fine_col):
@@ -107,14 +120,35 @@ def validate_resolutions(resolutions):
     required = {float(key.rsplit("_r", 1)[1]) for key in (BASE_KEY, PARENT_KEY)}
     missing = sorted(required - set(values))
     if missing:
-        raise ValueError(f"--resolutions must include {sorted(required)} for zoom-in annotation; "
-                         f"missing {missing}. Inherited clusterings cannot substitute for this round's results.")
+        raise ValueError(
+            f"--resolutions must include {sorted(required)} for zoom-in annotation; "
+            f"missing {missing}. Inherited clusterings cannot substitute for this round's results."
+        )
     return values
 
 
-def run_lineage(sub, name, labels, all_labels, markers, outdir, *, batch_col, species, h5ad_path, resolutions,
-                n_top_genes, n_pcs, n_neighbors, harmony_kwargs, keys_for_foreign, language, model, effort,
-                max_turns):
+def run_lineage(
+    sub,
+    name,
+    labels,
+    all_labels,
+    markers,
+    outdir,
+    *,
+    batch_col,
+    species,
+    h5ad_path,
+    resolutions,
+    n_top_genes,
+    n_pcs,
+    n_neighbors,
+    harmony_kwargs,
+    keys_for_foreign,
+    language,
+    model,
+    effort,
+    max_turns,
+):
     """sub: the lineage subset from subset_for(). Writes <outdir>/<slug>/ and
     returns its result record."""
     resolutions = validate_resolutions(resolutions)
@@ -124,21 +158,45 @@ def run_lineage(sub, name, labels, all_labels, markers, outdir, *, batch_col, sp
     generation = _generation(outdir)
     expected = sub.obs_names.copy()
     log.info(f"== [{name}] re-embedding {sub.n_obs} cells")
-    integrate_adata(sub, batch_col, d, species=species, resolutions=tuple(resolutions),
-                    n_top_genes=n_top_genes, n_pcs=n_pcs, n_neighbors=n_neighbors,
-                    harmony_kwargs=harmony_kwargs, inputs=[h5ad_path],
-                    meta_extra={"zmip_lineage": name, "zmip_coarse_labels": list(labels)})
+    integrate_adata(
+        sub,
+        batch_col,
+        d,
+        species=species,
+        resolutions=tuple(resolutions),
+        n_top_genes=n_top_genes,
+        n_pcs=n_pcs,
+        n_neighbors=n_neighbors,
+        harmony_kwargs=harmony_kwargs,
+        inputs=[h5ad_path],
+        meta_extra={"zmip_lineage": name, "zmip_coarse_labels": list(labels)},
+    )
     figdir = os.path.join(d, "figures")
     log.info(f"== [{name}] foreign-lineage scores")
     foreign_cols = score_foreign(sub, markers, name, keys_for_foreign, d, figdir)
     for c in PREVIOUS_COLS:
         col = c + PREV_SUFFIX
         n = sub.obs[col].nunique()
-        save_single_umap(sub, col, os.path.join(figdir, f"umap_{col}.png"), repel=True,
-                         repel_fontsize=8 if n > 15 else 11, figsize=(9, 9) if n > 15 else None)
+        save_single_umap(
+            sub,
+            col,
+            os.path.join(figdir, f"umap_{col}.png"),
+            repel=True,
+            repel_fontsize=8 if n > 15 else 11,
+            figsize=(9, 9) if n > 15 else None,
+        )
     annotate_lineage(
-        sub, d, name, labels, sorted(set(all_labels) - set(labels)), foreign_cols,
-        species=species, language=language, model=model, effort=effort, max_turns=max_turns,
+        sub,
+        d,
+        name,
+        labels,
+        sorted(set(all_labels) - set(labels)),
+        foreign_cols,
+        species=species,
+        language=language,
+        model=model,
+        effort=effort,
+        max_turns=max_turns,
     )
     # Validate the files that resume will read, not only the in-memory tables.
     from .merge import _validate_annotation, _validate_partition
@@ -155,6 +213,7 @@ def run_lineage(sub, name, labels, all_labels, markers, outdir, *, batch_col, sp
 
 
 # ---------------------------------------------------------------- the pool
+
 
 def _estimate_bytes(n_cells):
     per_cell = float(os.environ.get("ZMIP_MEM_PER_CELL_MB", "0.4")) * (1 << 20)
@@ -178,17 +237,15 @@ def plan_concurrency(todo):
 def _pump(proc, tag):
     for raw in proc.stdout:
         line = raw.rstrip("\n")
-        if line.startswith("== [") and f"{tag}]" in line[:len(tag) + 12]:
+        if line.startswith("== [") and f"{tag}]" in line[: len(tag) + 12]:
             log.info(line)  # already tagged by the agent trace ("== [zmip <tag>] ..." / "== [<tag>] ...")
         else:
             log.info(f"[{tag}] {line}")
 
 
 def _signal_group(proc, sig):
-    try:
+    with contextlib.suppress(ProcessLookupError):
         os.killpg(proc.pid, sig)
-    except ProcessLookupError:
-        pass
 
 
 def _terminate_pool(signum, frame):
@@ -215,10 +272,8 @@ def _stop_children(running):
         _signal_group(proc, signal.SIGTERM)
     deadline = time.monotonic() + 5
     for proc, _, _, _ in children:
-        try:
+        with contextlib.suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=max(0, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            pass
     # Kill the whole group even if its leader exited before a descendant.
     for proc, _, _, _ in children:
         _signal_group(proc, signal.SIGKILL)
@@ -233,12 +288,13 @@ def run_lineages_parallel(ad, todo, all_labels, outdir, child_args, *, coarse_co
     {name: result} for the ones that finished and raises if any failed."""
     todo = sorted(todo, key=lambda ln: -ln["n_cells"])  # biggest first: it bounds the wall-clock
     max_parallel, budget, threads = plan_concurrency(todo)
-    log.info(f"== zmip lineages in parallel: {len(todo)} to run, up to {max_parallel} at once, "
-          f"{threads} thread(s) each, memory budget {budget / 2**30:.1f} GiB "
-          f"({available_cpus()} cpu(s), {available_memory_bytes() / 2**30:.1f} GiB available)")
+    log.info(
+        f"== zmip lineages in parallel: {len(todo)} to run, up to {max_parallel} at once, "
+        f"{threads} thread(s) each, memory budget {budget / 2**30:.1f} GiB "
+        f"({available_cpus()} cpu(s), {available_memory_bytes() / 2**30:.1f} GiB available)"
+    )
     env = dict(os.environ)
-    for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS",
-              "MSP_MAX_THREADS"):
+    for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS", "MSP_MAX_THREADS"):
         env[k] = str(threads)
 
     pending = list(todo)
@@ -278,14 +334,23 @@ def run_lineages_parallel(ad, todo, all_labels, outdir, child_args, *, coarse_co
                 subset_path = os.path.join(d, SUBSET_FILE)
                 subset_for(ad, ln["coarse_labels"], coarse_col, fine_col).write_h5ad(subset_path)
                 cmd = [sys.executable, "-m", "zmip.lineage", outdir, name, "--subset", subset_path, *child_args]
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                        env=env, bufsize=1, start_new_session=True)
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    env=env,
+                    bufsize=1,
+                    start_new_session=True,
+                )
                 log_thread = threading.Thread(target=_pump, args=(proc, name), daemon=True)
                 running[name] = (proc, est, time.time(), log_thread)
                 log_thread.start()
                 used += est
-                log.info(f"== [{name}] lineage started: {ln['n_cells']} cells, est {est / 2**30:.1f} GiB, "
-                      f"{len(running)} running, {len(pending)} waiting")
+                log.info(
+                    f"== [{name}] lineage started: {ln['n_cells']} cells, est {est / 2**30:.1f} GiB, "
+                    f"{len(running)} running, {len(pending)} waiting"
+                )
             if running:
                 time.sleep(5)
     finally:
@@ -330,17 +395,34 @@ def main(argv=None):
         plan = json.load(stream)
     entry = next(ln for ln in plan["lineages"] if ln["name"] == args.name)
     all_labels = {lab for ln in plan["lineages"] for lab in ln["coarse_labels"]}
-    mk = pd.read_csv(os.path.join(args.outdir, "lineage_markers.csv"),
-                     keep_default_na=False, dtype={"lineage": str, "gene": str})
+    mk = pd.read_csv(
+        os.path.join(args.outdir, "lineage_markers.csv"), keep_default_na=False, dtype={"lineage": str, "gene": str}
+    )
     markers = {g: mk.loc[mk["lineage"] == g, "gene"].tolist() for g in mk["lineage"].unique()}
     sub = sc.read_h5ad(args.subset)
     os.remove(args.subset)
     keys_for_foreign = [f"msp_leiden_r{r}" for r in args.resolutions if r in (1.0, 2.0)]
-    run_lineage(sub, args.name, entry["coarse_labels"], all_labels, markers, args.outdir,
-                batch_col=args.batch_col, species=args.species, h5ad_path=args.h5ad,
-                resolutions=args.resolutions, n_top_genes=args.n_top_genes, n_pcs=args.n_pcs,
-                n_neighbors=args.n_neighbors, harmony_kwargs=harmony_kwargs, keys_for_foreign=keys_for_foreign,
-                language=args.language, model=args.model, effort=args.effort, max_turns=args.max_turns)
+    run_lineage(
+        sub,
+        args.name,
+        entry["coarse_labels"],
+        all_labels,
+        markers,
+        args.outdir,
+        batch_col=args.batch_col,
+        species=args.species,
+        h5ad_path=args.h5ad,
+        resolutions=args.resolutions,
+        n_top_genes=args.n_top_genes,
+        n_pcs=args.n_pcs,
+        n_neighbors=args.n_neighbors,
+        harmony_kwargs=harmony_kwargs,
+        keys_for_foreign=keys_for_foreign,
+        language=args.language,
+        model=args.model,
+        effort=args.effort,
+        max_turns=args.max_turns,
+    )
 
 
 if __name__ == "__main__":

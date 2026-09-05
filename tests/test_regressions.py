@@ -13,10 +13,12 @@ from zmip.plan import validate_plan
 
 
 def make_plan(names=("A", "B")):
-    return {"lineages": [
-        {"name": name, "coarse_labels": [label], "zoom": True}
-        for name, label in zip(names, ("A", "B"))
-    ]}
+    return {
+        "lineages": [
+            {"name": name, "coarse_labels": [label], "zoom": True}
+            for name, label in zip(names, ("A", "B"), strict=False)
+        ]
+    }
 
 
 def validate(plan, islands=None):
@@ -25,16 +27,23 @@ def validate(plan, islands=None):
 
 
 def cluster(cid="0", **updates):
-    entry = dict(cluster_id=cid, coarse_label="A", fine_label=f"type {cid}",
-                 merge_target=None, action="keep", confidence="high",
-                 evidence=dict.fromkeys(("distinctness", "markers", "foreign", "merge"), "checked"),
-                 rationale="checked")
+    entry = dict(
+        cluster_id=cid,
+        coarse_label="A",
+        fine_label=f"type {cid}",
+        merge_target=None,
+        action="keep",
+        confidence="high",
+        evidence=dict.fromkeys(("distinctness", "markers", "foreign", "merge"), "checked"),
+        rationale="checked",
+    )
     entry.update(updates)
     return entry
 
 
-@pytest.mark.parametrize("names", [("T/B", "T B"), ("..", "B"), (".", "B"), ("figures", "B"),
-                                   (".zmip-publish", "B"), (".hidden", "B")])
+@pytest.mark.parametrize(
+    "names", [("T/B", "T B"), ("..", "B"), (".", "B"), ("figures", "B"), (".zmip-publish", "B"), (".hidden", "B")]
+)
 def test_plan_rejects_unsafe_or_colliding_directories(names):
     problems, normalized = validate(make_plan(names))
     assert problems and normalized is None
@@ -47,8 +56,9 @@ def test_directory_preserves_existing_slug_and_rejects_external_symlink(tmp_path
         lineage_dir(str(tmp_path), "A")
 
 
-@pytest.mark.parametrize("payload", [None, [], 1, {"lineages": [None]},
-                                       {"lineages": [{"name": "A", "coarse_labels": [{}]}]}])
+@pytest.mark.parametrize(
+    "payload", [None, [], 1, {"lineages": [None]}, {"lineages": [{"name": "A", "coarse_labels": [{}]}]}]
+)
 def test_malformed_plan_returns_validation_problems(payload):
     assert validate(payload)[0]
 
@@ -64,7 +74,7 @@ def test_plan_requires_real_booleans(value):
 
 
 def test_island_defenses_and_real_false_are_preserved():
-    shared = pd.DataFrame({"island_1": [100., 100.]}, index=["A", "B"])
+    shared = pd.DataFrame({"island_1": [100.0, 100.0]}, index=["A", "B"])
     plan = make_plan()
     assert validate(plan, shared)[0]
     plan["confirm_shared_islands"] = True
@@ -72,7 +82,7 @@ def test_island_defenses_and_real_false_are_preserved():
     assert not problems and normalized["host_warnings"]
     plan["lineages"][0]["zoom"] = False
     assert validate(plan)[1]["lineages"][0]["zoom"] is False
-    separate = pd.DataFrame({"island_1": [100., 0.], "island_2": [0., 100.]}, index=["A", "B"])
+    separate = pd.DataFrame({"island_1": [100.0, 0.0], "island_2": [0.0, 100.0]}, index=["A", "B"])
     pooled = {"lineages": [{"name": "Both", "coarse_labels": ["A", "B"]}]}
     assert validate(pooled, separate)[0]
 
@@ -112,8 +122,9 @@ def test_finalization_names_stale_merge_reference():
 
 def test_disk_results_preserve_identifiers_and_removal_flags(tmp_path):
     ids = ["002", "NA", "null"]
-    removed = pd.DataFrame(dict(cell=ids, lineage="NA", cluster="01", preannotation=False,
-                                annotate_remove=True, remove_reason="doublet"))
+    removed = pd.DataFrame(
+        dict(cell=ids, lineage="NA", cluster="01", preannotation=False, annotate_remove=True, remove_reason="doublet")
+    )
     reassigned = pd.DataFrame(dict(cell=ids, lineage="NA", cluster="01", reassign_to="NA", fine_label="null"))
     removed.to_csv(tmp_path / "annotation_removed.csv", index=False)
     reassigned.to_csv(tmp_path / "annotation_reassigned.csv", index=False)
@@ -125,20 +136,25 @@ def test_disk_results_preserve_identifiers_and_removal_flags(tmp_path):
 
 def test_fine_figure_uses_coarse_and_fine_pair(tmp_path, monkeypatch):
     merge = importlib.import_module("zmip.merge")
-    obs = pd.DataFrame({"zmip_ann_coarse": pd.Categorical(["A", "B"]),
-                        "zmip_ann_fine": pd.Categorical(["cycling", "cycling"]),
-                        "zmip_lineage": pd.Categorical(["A", "B"]),
-                        "zmip_action": pd.Categorical(["keep", "keep"]),
-                        "zmip_reassigned_from": pd.Categorical([None, None])}, index=["a", "b"])
+    obs = pd.DataFrame(
+        {
+            "zmip_ann_coarse": pd.Categorical(["A", "B"]),
+            "zmip_ann_fine": pd.Categorical(["cycling", "cycling"]),
+            "zmip_lineage": pd.Categorical(["A", "B"]),
+            "zmip_action": pd.Categorical(["keep", "keep"]),
+            "zmip_reassigned_from": pd.Categorical([None, None]),
+        },
+        index=["a", "b"],
+    )
     ad = AnnData(np.ones((2, 2), dtype="float32"), obs=obs)
-    ad.obsm["X_umap"] = np.array([[0., 0.], [1., 1.]])
+    ad.obsm["X_umap"] = np.array([[0.0, 0.0], [1.0, 1.0]])
     captured = []
 
     def capture(data, column, path, **kwargs):
         if column == "_fine_id":
             captured.extend(data.obs[column].tolist())
 
-    monkeypatch.setattr(merge, "_palette", lambda *args: None)
+    monkeypatch.setattr(merge, "palette", lambda *args: None)
     monkeypatch.setattr(merge, "save_single_umap", capture)
     figdir = tmp_path / "figures"
     figdir.mkdir()

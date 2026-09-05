@@ -49,10 +49,10 @@ log = logging.getLogger(__name__)
 DEFAULT_MIN_CELLS = 800
 
 # UMAP islands (host evidence + validation)
-ISLAND_K = 15            # kNN in 2-D UMAP space
+ISLAND_K = 15  # kNN in 2-D UMAP space
 ISLAND_EDGE_FACTOR = 4.0  # prune edges longer than this × the median k-th-neighbour distance
 ISLAND_MIN_FRAC = 0.002  # components smaller than max(20, this × n_obs) are noise (island 0)
-HOME_FRAC = 0.30         # an island holding ≥ this share of a label's cells is a home island of the label
+HOME_FRAC = 0.30  # an island holding ≥ this share of a label's cells is a home island of the label
 
 
 def _lineage_slugs(names):
@@ -70,6 +70,7 @@ def _lineage_slugs(names):
         owners[directory] = name
         result[name] = directory
     return result
+
 
 def umap_islands(ad, coarse_col, outdir):
     """Connected components of the UMAP kNN graph (k=ISLAND_K, edges longer
@@ -102,12 +103,12 @@ def umap_islands(ad, coarse_col, outdir):
     labels = list(pd.Series(lab).value_counts().index)
     cols_out = [f"island_{i}" for i in range(1, len(big) + 1)] + ["noise"]
     tab = pd.DataFrame(0.0, index=labels, columns=cols_out)
-    for l in labels:
-        m = lab == l
+    for label in labels:
+        m = lab == label
         counts = np.bincount(island[m], minlength=len(big) + 1)
         pct = 100 * counts / max(1, m.sum())
-        tab.loc[l, cols_out[:-1]] = pct[1:]
-        tab.loc[l, "noise"] = pct[0]
+        tab.loc[label, cols_out[:-1]] = pct[1:]
+        tab.loc[label, "noise"] = pct[0]
     tab = tab.round(1)
     tab.index.name = f"{coarse_col} \\ % of cells per UMAP island"
     tab.attrs["island_sizes"] = {f"island_{i + 1}": int(sizes[c]) for i, c in enumerate(big)}
@@ -140,10 +141,12 @@ def island_problems(lineages, islands):
             continue
         # union-find over islands via the labels that span them
         parent = {}
-        def find(x):
+
+        def find(x, parent=parent):
             while parent.setdefault(x, x) != x:
                 x = parent[x]
             return x
+
         for h in anchored.values():
             h = sorted(h)
             for other in h[1:]:
@@ -152,10 +155,13 @@ def island_problems(lineages, islands):
         for m, h in anchored.items():
             groups.setdefault(find(next(iter(h))), []).append(m)
         if len(groups) > 1:
-            parts = "; ".join(f"{sorted(ms)} on {sorted(set().union(*(homes[m] for m in ms)))}"
-                              for ms in groups.values())
-            hard.append(f"lineage {ln['name']!r} pools labels that sit on separate UMAP islands: {parts} "
-                        f"(see lineage_islands.csv) — separate islands must be separate lineages")
+            parts = "; ".join(
+                f"{sorted(ms)} on {sorted(set().union(*(homes[m] for m in ms)))}" for ms in groups.values()
+            )
+            hard.append(
+                f"lineage {ln['name']!r} pools labels that sit on separate UMAP islands: {parts} "
+                f"(see lineage_islands.csv) — separate islands must be separate lineages"
+            )
     by_label = {m: ln["name"] for ln in lineages for m in ln["coarse_labels"]}
     for isl in [c for c in islands.columns if c != "noise"]:
         owners = {}
@@ -163,8 +169,10 @@ def island_problems(lineages, islands):
             if isl in home_islands(islands, m) and m in by_label:
                 owners.setdefault(by_label[m], []).append(m)
         if len(owners) > 1:
-            soft.append(f"{isl} ({islands.attrs.get('island_sizes', {}).get(isl, '?')} cells) is shared by labels "
-                        f"in different lineages: " + "; ".join(f"{n!r}: {ms}" for n, ms in owners.items()))
+            soft.append(
+                f"{isl} ({islands.attrs.get('island_sizes', {}).get(isl, '?')} cells) is shared by labels "
+                f"in different lineages: " + "; ".join(f"{n!r}: {ms}" for n, ms in owners.items())
+            )
     return hard, soft
 
 
@@ -175,11 +183,13 @@ def lineage_evidence(ad, coarse_col, batch_col, outdir):
     lab = ad.obs[coarse_col].astype(str)
     labels = list(lab.value_counts().index)
 
-    counts = pd.DataFrame({
-        "n_cells": lab.value_counts(),
-        "n_samples": ad.obs.groupby(lab, observed=True)[batch_col].nunique(),
-        "pct": (100 * lab.value_counts() / ad.n_obs).round(2),
-    }).loc[labels]
+    counts = pd.DataFrame(
+        {
+            "n_cells": lab.value_counts(),
+            "n_samples": ad.obs.groupby(lab, observed=True)[batch_col].nunique(),
+            "pct": (100 * lab.value_counts() / ad.n_obs).round(2),
+        }
+    ).loc[labels]
     counts.index.name = coarse_col
     counts.to_csv(os.path.join(outdir, "lineage_counts.csv"))
 
@@ -200,12 +210,12 @@ def lineage_evidence(ad, coarse_col, batch_col, outdir):
         try:
             # PAGA uses the neighbor graph and labels, never expression matrices.
             neighbors = copy.deepcopy(ad.uns["neighbors"])
-            keys = [neighbors.get("connectivities_key", "connectivities"),
-                    neighbors.get("distances_key", "distances")]
-            tmp = AnnData(obs=pd.DataFrame({"_zmip_coarse": pd.Categorical(lab, categories=labels)},
-                                          index=ad.obs_names.copy()),
-                          obsp={key: ad.obsp[key] for key in keys if key in ad.obsp},
-                          uns={"neighbors": neighbors})
+            keys = [neighbors.get("connectivities_key", "connectivities"), neighbors.get("distances_key", "distances")]
+            tmp = AnnData(
+                obs=pd.DataFrame({"_zmip_coarse": pd.Categorical(lab, categories=labels)}, index=ad.obs_names.copy()),
+                obsp={key: ad.obsp[key] for key in keys if key in ad.obsp},
+                uns={"neighbors": neighbors},
+            )
             sc.tl.paga(tmp, groups="_zmip_coarse")
             P = np.asarray(tmp.uns["paga"]["connectivities"].todense())
             paga = pd.DataFrame(P.round(3), index=labels, columns=labels)
@@ -215,9 +225,14 @@ def lineage_evidence(ad, coarse_col, batch_col, outdir):
             log.warning(f"== paga skipped: {e}")
 
     n = len(labels)
-    save_single_umap(ad, coarse_col, os.path.join(figdir, f"umap_{slug(coarse_col)}.png"),
-                     repel=True, repel_fontsize=9 if n > 12 else 11,
-                     figsize=(9, 9) if n > 12 else None)
+    save_single_umap(
+        ad,
+        coarse_col,
+        os.path.join(figdir, f"umap_{slug(coarse_col)}.png"),
+        repel=True,
+        repel_fontsize=9 if n > 12 else 11,
+        figsize=(9, 9) if n > 12 else None,
+    )
     islands = umap_islands(ad, coarse_col, outdir)
     return counts, knn, paga, islands
 
@@ -272,8 +287,15 @@ def validate_plan(plan, labels, counts, min_cells, islands=None):
         forced = ""
         if zoom and n < min_cells:
             zoom, forced = False, f" (host: {n} < min_cells={min_cells}, zoom disabled)"
-        out.append({"name": name, "coarse_labels": list(members), "n_cells": n, "zoom": zoom,
-                    "reason": str(ln.get("reason", "")) + forced})
+        out.append(
+            {
+                "name": name,
+                "coarse_labels": list(members),
+                "n_cells": n,
+                "zoom": zoom,
+                "reason": str(ln.get("reason", "")) + forced,
+            }
+        )
     missing = [m for m in labels if m not in seen_labels]
     if missing:
         problems.append(f"coarse labels not assigned to any lineage: {missing}")
@@ -286,8 +308,11 @@ def validate_plan(plan, labels, counts, min_cells, islands=None):
     hard, soft = island_problems(out, islands)
     problems += hard
     if soft and not plan.get("confirm_shared_islands", False):
-        problems += [f"{w} — labels on one island belong to one lineage unless the picture shows a real gap; "
-                     f"either merge them or resubmit unchanged with \"confirm_shared_islands\": true" for w in soft]
+        problems += [
+            f"{w} — labels on one island belong to one lineage unless the picture shows a real gap; "
+            f'either merge them or resubmit unchanged with "confirm_shared_islands": true'
+            for w in soft
+        ]
     if problems:
         return problems, None
     norm = {"lineages": out, "notes": str(plan.get("notes", "")), "min_cells": min_cells}
@@ -312,10 +337,15 @@ def _islands_text(islands):
     if islands is None:
         return ""
     sizes = islands.attrs.get("island_sizes", {})
-    return ("\nUMAP islands computed by the host (connected components of the 2-D UMAP kNN graph; % of each label's "
-            "cells per island; island sizes " + ", ".join(f"{k}={v}" for k, v in sizes.items()) + "):\n"
-            + islands.to_string() + "\nThe host rejects a lineage that pools labels sitting on different islands, "
-            "and asks once for confirmation when labels sharing an island are split across lineages.\n")
+    return (
+        "\nUMAP islands computed by the host (connected components of the 2-D UMAP kNN graph; % of each label's "
+        "cells per island; island sizes "
+        + ", ".join(f"{k}={v}" for k, v in sizes.items())
+        + "):\n"
+        + islands.to_string()
+        + "\nThe host rejects a lineage that pools labels sitting on different islands, "
+        "and asks once for confirmation when labels sharing an island are split across lineages.\n"
+    )
 
 
 def _prompt(coarse_col, labels, counts, knn, paga, islands, min_cells, fig_rel, species):
@@ -345,7 +375,7 @@ Cells and samples per coarse label:
 
 kNN cross-connectivity (% of each row label's edges that land on the column label; diagonal = within):
 {knn.to_string()}
-{('PAGA connectivity:' + chr(10) + paga.to_string()) if paga is not None else ''}
+{("PAGA connectivity:" + chr(10) + paga.to_string()) if paga is not None else ""}
 {_islands_text(islands)}
 Finish by calling submit_plan with JSON of this schema:
 {_PLAN_SCHEMA_DOC}
@@ -362,31 +392,51 @@ async def _run(coarse_col, labels, counts, knn, paga, islands, outdir, min_cells
             return {"content": [{"type": "text", "text": f"JSON parse error: {e}"}], "is_error": True}
         problems, norm = validate_plan(plan, labels, counts, min_cells, islands)
         if problems:
-            return {"content": [{"type": "text", "text": "fix and resubmit:\n- " + "\n- ".join(problems)}],
-                    "is_error": True}
-        return {"content": [{"type": "text", "text": "plan accepted: " + ", ".join(
-            f"{ln['name']}={ln['coarse_labels']} ({ln['n_cells']} cells, zoom={ln['zoom']})"
-            for ln in norm["lineages"])}], "_submitted": norm}
+            return {
+                "content": [{"type": "text", "text": "fix and resubmit:\n- " + "\n- ".join(problems)}],
+                "is_error": True,
+            }
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "plan accepted: "
+                    + ", ".join(
+                        f"{ln['name']}={ln['coarse_labels']} ({ln['n_cells']} cells, zoom={ln['zoom']})"
+                        for ln in norm["lineages"]
+                    ),
+                }
+            ],
+            "_submitted": norm,
+        }
 
     tool = ToolSpec(
         name="submit_plan",
         description="Submit the lineage plan (JSON string, schema in the task).",
-        input_schema={"plan_json": str}, handler=submit_plan,
+        input_schema={"plan_json": str},
+        handler=submit_plan,
     )
     fig_rel = os.path.join("figures", f"umap_{slug(coarse_col)}.png")
     result = await run_agent(
-        tools=[tool], submit_tool="submit_plan",
+        tools=[tool],
+        submit_tool="submit_plan",
         prompt=f"Read {fig_rel}, then plan the lineages and call submit_plan.",
         system_prompt=_prompt(coarse_col, labels, counts, knn, paga, islands, min_cells, fig_rel, species),
-        cwd=os.path.abspath(outdir), model=model, effort=effort, max_turns=30,
-        allowed_builtin=("read",), max_buffer_size=50_000_000, label="zmip plan",
+        cwd=os.path.abspath(outdir),
+        model=model,
+        effort=effort,
+        max_turns=30,
+        allowed_builtin=("read",),
+        max_buffer_size=50_000_000,
+        label="zmip plan",
     )
     result.submitted["agent_notes"] = result.transcript_text or ""
     return result.submitted
 
 
-def plan_lineages(ad, coarse_col, batch_col, outdir, min_cells=DEFAULT_MIN_CELLS, species=None,
-                  model=None, effort=None, force=False):
+def plan_lineages(
+    ad, coarse_col, batch_col, outdir, min_cells=DEFAULT_MIN_CELLS, species=None, model=None, effort=None, force=False
+):
     """Evidence → agent → validated plan, archived to outdir/zmip_plan.json
     (reused when present)."""
     from harness_bridge import default_model
@@ -407,8 +457,11 @@ def plan_lineages(ad, coarse_col, batch_col, outdir, min_cells=DEFAULT_MIN_CELLS
         log.info(f"== reusing recorded plan {path}")
         return plan
     labels = list(counts.index)
-    plan = asyncio.run(_run(coarse_col, labels, counts, knn, paga, islands, outdir, min_cells, species,
-                            model or default_model(), effort))
+    plan = asyncio.run(
+        _run(
+            coarse_col, labels, counts, knn, paga, islands, outdir, min_cells, species, model or default_model(), effort
+        )
+    )
     plan["coarse_col"] = coarse_col
     write_json(path, plan)
     return plan

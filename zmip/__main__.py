@@ -1,3 +1,5 @@
+# ruff: noqa: E402
+# Validate the runtime before importing downstream computational entry points.
 """python -m zmip: zoom-in pass over an msp annotated.h5ad.
 
   plan      agent groups coarse labels into UMAP-connected lineages, picks
@@ -48,23 +50,30 @@ from .plan import DEFAULT_MIN_CELLS, plan_lineages
 
 log = logging.getLogger(__name__)
 
-parser = argparse.ArgumentParser(prog="zmip", description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+parser = argparse.ArgumentParser(prog="zmip", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument("h5ad", help="msp annotated.h5ad (survivors with msp_ann_coarse/msp_ann_fine)")
 parser.add_argument("--outdir", required=True)
 parser.add_argument("--coarse-col", default="msp_ann_coarse")
 parser.add_argument("--fine-col", default="msp_ann_fine")
 parser.add_argument("--batch-col", default=None, help="defaults to uns['msp']['batch_col']")
 parser.add_argument("--species", default=None, help="defaults to uns['msp']['species']")
-parser.add_argument("--min-cells", type=int, default=DEFAULT_MIN_CELLS,
-                    help=f"smallest lineage that gets zoomed (default {DEFAULT_MIN_CELLS})")
+parser.add_argument(
+    "--min-cells",
+    type=int,
+    default=DEFAULT_MIN_CELLS,
+    help=f"smallest lineage that gets zoomed (default {DEFAULT_MIN_CELLS})",
+)
 add_integration_options(parser)
 parser.add_argument("--language", default="English")
 parser.add_argument("--model", default=None)
 parser.add_argument("--effort", default=None, choices=["low", "medium", "high", "xhigh", "max"])
 parser.add_argument("--max-turns", type=int, default=200)
-parser.add_argument("--report-context", default=None, metavar="TEXT",
-                    help='where this run sits, for report titles (e.g. "round 2 · fu2022-meniscus")')
+parser.add_argument(
+    "--report-context",
+    default=None,
+    metavar="TEXT",
+    help='where this run sits, for report titles (e.g. "round 2 · fu2022-meniscus")',
+)
 parser.add_argument("--force", action="store_true")
 args = parser.parse_args()
 configure_logging("zmip", "msp")
@@ -84,14 +93,16 @@ with cache.lock_run(out):
     # Agent settings steer how decisions are produced; they are recorded for the audit trail
     # but do not invalidate finished stages (raising --max-turns must not force a full rerun).
     agent_keys = {"model", "effort", "max_turns", "language"}
-    options = {k: v for k, v in vars(args).items()
-               if k not in {"h5ad", "outdir", "force", "report_context"} | agent_keys}
+    options = {
+        k: v for k, v in vars(args).items() if k not in {"h5ad", "outdir", "force", "report_context"} | agent_keys
+    }
     agent = {k: getattr(args, k) for k in sorted(agent_keys)}
     agent["harness"] = agent_config.harness
     agent["harness_options"] = {k: os.environ.get(k) for k in ("DSH_PROVIDER", "OPENAI_AGENTS_API")}
     # Endpoint identity matters, but do not copy URLs (possibly containing credentials) into receipts.
-    agent["endpoint_sha256"] = {k: hashlib.sha256(os.environ.get(k, "").encode()).hexdigest()
-                                for k in ("DOUBAO_BASE_URL", "ANTHROPIC_BASE_URL")}
+    agent["endpoint_sha256"] = {
+        k: hashlib.sha256(os.environ.get(k, "").encode()).hexdigest() for k in ("DOUBAO_BASE_URL", "ANTHROPIC_BASE_URL")
+    }
     generation = cache.prepare_run(out, args.h5ad, options, force=args.force, agent=agent)
     write_report_context(out, args.report_context)
     ad = sc.read_h5ad(args.h5ad)
@@ -107,9 +118,17 @@ with cache.lock_run(out):
             sys.exit(f"obs[{c!r}] missing — input must be msp's annotated.h5ad (or pass --coarse-col/--fine-col)")
     log.info(f"== {ad.n_obs} cells, batch={batch_col!r}, species={species}")
 
-    plan = plan_lineages(ad, args.coarse_col, batch_col, out, min_cells=args.min_cells, species=species,
-                         model=args.model, effort=args.effort,
-                         force=not cache.valid(out, "plan", generation, ["zmip_plan.json"]))
+    plan = plan_lineages(
+        ad,
+        args.coarse_col,
+        batch_col,
+        out,
+        min_cells=args.min_cells,
+        species=species,
+        model=args.model,
+        effort=args.effort,
+        force=not cache.valid(out, "plan", generation, ["zmip_plan.json"]),
+    )
     cache.seal(out, "plan", generation, ["zmip_plan.json"])
     label_to_lineage = {lab: ln["name"] for ln in plan["lineages"] for lab in ln["coarse_labels"]}
     ad.obs["_zmip_lineage"] = ad.obs[args.coarse_col].astype(str).map(label_to_lineage).astype("category")
@@ -153,19 +172,45 @@ with cache.lock_run(out):
         else:
             todo.append(ln)
 
-    common = dict(batch_col=batch_col, species=species, h5ad_path=args.h5ad, resolutions=args.resolutions,
-                  n_top_genes=args.n_top_genes, n_pcs=args.n_pcs, n_neighbors=args.n_neighbors,
-                  harmony_kwargs=harmony_kwargs, keys_for_foreign=keys_for_foreign, language=args.language,
-                  model=args.model, effort=args.effort, max_turns=args.max_turns)
+    common = dict(
+        batch_col=batch_col,
+        species=species,
+        h5ad_path=args.h5ad,
+        resolutions=args.resolutions,
+        n_top_genes=args.n_top_genes,
+        n_pcs=args.n_pcs,
+        n_neighbors=args.n_neighbors,
+        harmony_kwargs=harmony_kwargs,
+        keys_for_foreign=keys_for_foreign,
+        language=args.language,
+        model=args.model,
+        effort=args.effort,
+        max_turns=args.max_turns,
+    )
     if len(todo) == 1 or os.environ.get("ZMIP_PARALLEL", "").strip() == "1":
         for ln in todo:  # in-process, exactly the old sequential path
             sub = subset_for(ad, ln["coarse_labels"], args.coarse_col, args.fine_col)
             results[ln["name"]] = run_lineage(sub, ln["name"], ln["coarse_labels"], all_labels, markers, out, **common)
             del sub
     elif todo:
-        child_args = ["--h5ad", args.h5ad, "--batch-col", batch_col, "--resolutions", *map(str, args.resolutions),
-                      "--n-top-genes", str(args.n_top_genes), "--n-pcs", str(args.n_pcs),
-                      "--n-neighbors", str(args.n_neighbors), "--language", args.language, "--max-turns", str(args.max_turns)]
+        child_args = [
+            "--h5ad",
+            args.h5ad,
+            "--batch-col",
+            batch_col,
+            "--resolutions",
+            *map(str, args.resolutions),
+            "--n-top-genes",
+            str(args.n_top_genes),
+            "--n-pcs",
+            str(args.n_pcs),
+            "--n-neighbors",
+            str(args.n_neighbors),
+            "--language",
+            args.language,
+            "--max-turns",
+            str(args.max_turns),
+        ]
         for kv in args.harmony:
             child_args += ["--harmony", kv]
         if species:
@@ -174,8 +219,11 @@ with cache.lock_run(out):
             child_args += ["--model", args.model]
         if args.effort:
             child_args += ["--effort", args.effort]
-        results.update(run_lineages_parallel(ad, todo, all_labels, out, child_args,
-                                             coarse_col=args.coarse_col, fine_col=args.fine_col))
+        results.update(
+            run_lineages_parallel(
+                ad, todo, all_labels, out, child_args, coarse_col=args.coarse_col, fine_col=args.fine_col
+            )
+        )
 
     merge_back(ad, plan, results, out, coarse_col=args.coarse_col, fine_col=args.fine_col, with_report=True)
     log.info(f"== report: {os.path.join(out, 'report.html')}")

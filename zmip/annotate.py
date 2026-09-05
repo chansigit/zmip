@@ -41,9 +41,6 @@ from msp.annotate import (
     CONFIDENCES,
     PARENT_KEY,
     REMOVE_REASONS,
-    _components,
-    _plot,
-    _prior_label_columns,
 )
 from msp.evidence import (
     DEG_SQL_DOC,
@@ -58,18 +55,20 @@ from msp.evidence import (
     parse_reference,
     stability_table,
 )
-from msp.inspect import _subcluster_once
 from msp.report import generate_report
+
+from .msp_compat import components, plot_annotation, prior_label_columns, subcluster_once
 
 log = logging.getLogger(__name__)
 
 REMOVE_BUDGET = 0.10  # agent-removed share of a lineage above which finalize asks for a second look
 
 PREVIOUS_COLS = ("msp_ann_coarse", "msp_ann_fine")  # last round's labels, carried on the subset as
-PREV_SUFFIX = "_prev"                                 # msp_ann_coarse_prev / msp_ann_fine_prev
+PREV_SUFFIX = "_prev"  # msp_ann_coarse_prev / msp_ann_fine_prev
 
 
 # ---------------------------------------------------------------- context
+
 
 def _context(ad, key, cluster, batch_col, prior_cols, paga, pre_removed, foreign_cols, lineage_labels, tables=None):
     lab = ad.obs[key].astype(str)
@@ -78,20 +77,26 @@ def _context(ad, key, cluster, batch_col, prior_cols, paga, pre_removed, foreign
         return f"unknown cluster {cluster!r}"
     sub = ad.obs.loc[m]
     n = int(m.sum())
-    lines = [f"cluster {cluster} ({key}): n={n} cells, {int(pre_removed[m].sum())} "
-             f"({100 * pre_removed[m].mean():.1f}%) already slated for removal (subset preannotation filtering)"]
+    lines = [
+        f"cluster {cluster} ({key}): n={n} cells, {int(pre_removed[m].sum())} "
+        f"({100 * pre_removed[m].mean():.1f}%) already slated for removal (subset preannotation filtering)"
+    ]
     if key != BASE_KEY:
         base = sub[BASE_KEY].astype(str).value_counts()
         lines.append(f"  {BASE_KEY} composition: " + ", ".join(f"{i}:{v}" for i, v in base.head(5).items()))
     if PARENT_KEY in ad.obs:
         par = sub[PARENT_KEY].astype(str).value_counts()
-        lines.append(f"  {PARENT_KEY} parent composition: " +
-                     ", ".join(f"{i}:{v} ({100 * v / n:.0f}%)" for i, v in par.head(5).items()))
+        lines.append(
+            f"  {PARENT_KEY} parent composition: "
+            + ", ".join(f"{i}:{v} ({100 * v / n:.0f}%)" for i, v in par.head(5).items())
+        )
         main_parent = par.index[0]
         sib = ad.obs.loc[(ad.obs[PARENT_KEY].astype(str) == main_parent).values, key].astype(str).value_counts()
         sib = sib.drop(cluster, errors="ignore")
-        lines.append(f"  siblings under parent {main_parent} ({key}): " +
-                     (", ".join(f"{i}:{v}" for i, v in sib.items()) if len(sib) else "none"))
+        lines.append(
+            f"  siblings under parent {main_parent} ({key}): "
+            + (", ".join(f"{i}:{v}" for i, v in sib.items()) if len(sib) else "none")
+        )
     if key == BASE_KEY and cluster in paga:
         lines.append(f"  PAGA nearest neighbours ({BASE_KEY}): {', '.join(paga[cluster])}")
     if tables is not None:
@@ -99,22 +104,37 @@ def _context(ad, key, cluster, batch_col, prior_cols, paga, pre_removed, foreign
         if mk:
             lines.append(mk)
     vc = sub[batch_col].value_counts(normalize=True)
-    lines.append(f"  samples: {sub[batch_col].nunique()}/{ad.obs[batch_col].nunique()} present, "
-                 f"dominant sample share {vc.iloc[0]:.2f} ({vc.index[0]})")
-    qc = [c for c in ("doublet_score", "decontX_contamination", "pct_counts_mt", "n_genes_by_counts",
-                      "total_counts", "dissociation_score") if c in ad.obs]
+    lines.append(
+        f"  samples: {sub[batch_col].nunique()}/{ad.obs[batch_col].nunique()} present, "
+        f"dominant sample share {vc.iloc[0]:.2f} ({vc.index[0]})"
+    )
+    qc = [
+        c
+        for c in (
+            "doublet_score",
+            "decontX_contamination",
+            "pct_counts_mt",
+            "n_genes_by_counts",
+            "total_counts",
+            "dissociation_score",
+        )
+        if c in ad.obs
+    ]
     lines.append("  QC medians: " + ", ".join(f"{c}={sub[c].median():.3g}" for c in qc))
     if foreign_cols:
         lines.append("  foreign-lineage scores (mean | p90 | share above subset 99th pct) — evidence, not verdict:")
         for c in foreign_cols:
             hi = np.quantile(ad.obs[c], 0.99)
-            lines.append(f"    {c[len('foreign_'):]}: {sub[c].mean():.3f} | {sub[c].quantile(0.9):.3f} | "
-                         f"{(sub[c] > hi).mean():.2f}")
+            lines.append(
+                f"    {c[len('foreign_') :]}: {sub[c].mean():.3f} | {sub[c].quantile(0.9):.3f} | "
+                f"{(sub[c] > hi).mean():.2f}"
+            )
     prev = [c + PREV_SUFFIX for c in PREVIOUS_COLS if c + PREV_SUFFIX in ad.obs]
     for c in prev:
         cc = sub[c].astype(str).value_counts(normalize=True)
-        lines.append(f"  previous round {c[:-len(PREV_SUFFIX)]}: " +
-                     ", ".join(f"{i}:{v:.2f}" for i, v in cc.head(5).items()))
+        lines.append(
+            f"  previous round {c[: -len(PREV_SUFFIX)]}: " + ", ".join(f"{i}:{v:.2f}" for i, v in cc.head(5).items())
+        )
     lines.append(f"  this lineage's coarse labels (allowed for keep): {lineage_labels}")
     if prior_cols:
         lines.append("  prior label compositions (reference only, NOT ground truth; top 5 per column):")
@@ -153,8 +173,16 @@ def _validate_cluster(e, clusters, lineage_labels, other_labels):
     if not isinstance(e, dict):
         return ["cluster submission must be a JSON object"]
     problems = []
-    for k in ("cluster_id", "coarse_label", "fine_label", "merge_target", "action", "confidence",
-              "evidence", "rationale"):
+    for k in (
+        "cluster_id",
+        "coarse_label",
+        "fine_label",
+        "merge_target",
+        "action",
+        "confidence",
+        "evidence",
+        "rationale",
+    ):
         if k not in e:
             problems.append(f"missing field {k!r}")
     if problems:
@@ -169,15 +197,19 @@ def _validate_cluster(e, clusters, lineage_labels, other_labels):
     if act not in ("keep", "remove", "reassign"):
         problems.append("action must be keep|remove|reassign")
     elif act == "keep" and str(e["coarse_label"]).strip() not in lineage_labels:
-        problems.append(f"keep requires coarse_label in this lineage's labels {lineage_labels}; "
-                        f"got {e['coarse_label']!r} — if it is really another lineage's cell type, use "
-                        f"action=reassign with reassign_to")
+        problems.append(
+            f"keep requires coarse_label in this lineage's labels {lineage_labels}; "
+            f"got {e['coarse_label']!r} — if it is really another lineage's cell type, use "
+            f"action=reassign with reassign_to"
+        )
     elif act == "remove" and e.get("remove_reason") not in REMOVE_REASONS:
         problems.append(f"remove requires remove_reason in {REMOVE_REASONS}")
     elif act == "reassign":
         tgt = e.get("reassign_to")
         if not isinstance(tgt, str) or tgt not in other_labels:
-            problems.append(f"reassign_to must be a coarse label of another lineage {sorted(other_labels)}; got {tgt!r}")
+            problems.append(
+                f"reassign_to must be a coarse label of another lineage {sorted(other_labels)}; got {tgt!r}"
+            )
         elif str(e["coarse_label"]).strip() != tgt:
             problems.append(f"for reassign, coarse_label must equal reassign_to ({tgt!r})")
     if e["confidence"] not in CONFIDENCES:
@@ -207,26 +239,32 @@ def _validate_final(entries, clusters):
         if missing:
             problems.append(f"no submission for current clusters {missing}")
         if stale:
-            problems.append(f"submissions for clusters that no longer exist (split since): {stale} — resubmit their subclusters")
+            problems.append(
+                f"submissions for clusters that no longer exist (split since): {stale} — resubmit their subclusters"
+            )
         return problems
     for c, e in entries.items():
         mt = e.get("merge_target")
         if mt is None:
             continue
         if str(mt) not in entries:
-            problems.append(f"cluster {c}: merge_target {mt!r} is no longer a current cluster "
-                            "— resubmit this cluster with a current target or null")
+            problems.append(
+                f"cluster {c}: merge_target {mt!r} is no longer a current cluster "
+                "— resubmit this cluster with a current target or null"
+            )
             continue
         tgt = entries[str(mt)]
         if tgt["action"] != e["action"] or tgt.get("reassign_to") != e.get("reassign_to"):
-            problems.append(f"cluster {c} ({e['action']}) merges into {mt} ({tgt['action']}"
-                            f"{', → ' + str(tgt.get('reassign_to')) if tgt.get('reassign_to') else ''}) — "
-                            "merged clusters must share the same action (and reassign target)")
+            problems.append(
+                f"cluster {c} ({e['action']}) merges into {mt} ({tgt['action']}"
+                f"{', → ' + str(tgt.get('reassign_to')) if tgt.get('reassign_to') else ''}) — "
+                "merged clusters must share the same action (and reassign target)"
+            )
     if problems:
         return problems
-    comp = _components(entries)
+    comp = components(entries)
     seen = set()
-    for c, members in comp.items():
+    for _c, members in comp.items():
         key = tuple(members)
         if key in seen or len(members) < 2:
             continue
@@ -235,8 +273,10 @@ def _validate_final(entries, clusters):
         for field in ("coarse_label", "fine_label"):
             vals = {entries[m][field].strip() for m in live}
             if len(vals) > 1:
-                problems.append(f"merged group {'+'.join(members)} disagrees on {field}: "
-                                + "; ".join(f"{m}={entries[m][field]!r}" for m in live))
+                problems.append(
+                    f"merged group {'+'.join(members)} disagrees on {field}: "
+                    + "; ".join(f"{m}={entries[m][field]!r}" for m in live)
+                )
     by_fine = {}
     for c, e in entries.items():
         if e["action"] == "remove":
@@ -245,21 +285,26 @@ def _validate_final(entries, clusters):
     for fine, members in by_fine.items():
         coarse = {entries[m]["coarse_label"].strip() for m in members}
         if len(coarse) > 1:
-            problems.append(f"fine label {fine!r} sits under several coarse labels {sorted(coarse)} (clusters {members})")
+            problems.append(
+                f"fine label {fine!r} sits under several coarse labels {sorted(coarse)} (clusters {members})"
+            )
         comps = {tuple(comp[m]) for m in members}
         if len(comps) > 1:
-            problems.append(f"clusters {members} share fine label {fine!r} but are not merged — set merge_target "
-                            "between them or give them distinct fine labels")
+            problems.append(
+                f"clusters {members} share fine label {fine!r} but are not merged — set merge_target "
+                "between them or give them distinct fine labels"
+            )
     return problems
 
 
 # ---------------------------------------------------------------- apply
 
+
 def _apply(ad, key, proposal, pre_removed, lineage):
     """msp_ann_* columns on the subset (so msp's plotting/report code renders
     this round), plus the removal / reassignment archives."""
     entries = {str(e["cluster_id"]): e for e in proposal["clusters"]}
-    comp = _components(entries)
+    comp = components(entries)
     lab = ad.obs[key].astype(str)
     ad.obs["msp_ann_cluster"] = lab.map({c: "+".join(v) for c, v in comp.items()}).astype("category")
     ad.obs["msp_ann_coarse"] = lab.map({c: e["coarse_label"].strip() for c, e in entries.items()}).astype("category")
@@ -268,25 +313,42 @@ def _apply(ad, key, proposal, pre_removed, lineage):
     removed = pre_removed | agent_remove
     reassign = lab.isin([c for c, e in entries.items() if e["action"] == "reassign"]).values & ~removed
     ad.obs["msp_ann_action"] = pd.Categorical(np.where(removed, "remove", "keep"), categories=["keep", "remove"])
-    ad.obs["zmip_reassigned_to"] = lab.map({c: e.get("reassign_to") for c, e in entries.items()
-                                            if e["action"] == "reassign"}).where(reassign, None)
-    rm = pd.DataFrame({"cell": ad.obs_names, "lineage": lineage, "cluster": lab.values,
-                       "preannotation": pre_removed, "annotate_remove": agent_remove,
-                       "remove_reason": lab.map({c: e.get("remove_reason") for c, e in entries.items()
-                                                 if e["action"] == "remove"}).values})
-    ra = pd.DataFrame({"cell": ad.obs_names, "lineage": lineage, "cluster": lab.values,
-                       "reassign_to": ad.obs["zmip_reassigned_to"].values,
-                       "fine_label": ad.obs["msp_ann_fine"].astype(str).values})
+    ad.obs["zmip_reassigned_to"] = lab.map(
+        {c: e.get("reassign_to") for c, e in entries.items() if e["action"] == "reassign"}
+    ).where(reassign, None)
+    rm = pd.DataFrame(
+        {
+            "cell": ad.obs_names,
+            "lineage": lineage,
+            "cluster": lab.values,
+            "preannotation": pre_removed,
+            "annotate_remove": agent_remove,
+            "remove_reason": lab.map(
+                {c: e.get("remove_reason") for c, e in entries.items() if e["action"] == "remove"}
+            ).values,
+        }
+    )
+    ra = pd.DataFrame(
+        {
+            "cell": ad.obs_names,
+            "lineage": lineage,
+            "cluster": lab.values,
+            "reassign_to": ad.obs["zmip_reassigned_to"].values,
+            "fine_label": ad.obs["msp_ann_fine"].astype(str).values,
+        }
+    )
     return rm.loc[removed].reset_index(drop=True), ra.loc[reassign].reset_index(drop=True)
 
 
 # ---------------------------------------------------------------- agent
 
-def _system_prompt(outdir, lineage, lineage_labels, other_labels, clusters, batch_col, species,
-                   prior_cols, foreign_cols, language):
-    context = (f"Context — species: {species}." if species else "No species context was provided.")
+
+def _system_prompt(
+    outdir, lineage, lineage_labels, other_labels, clusters, batch_col, species, prior_cols, foreign_cols, language
+):
+    context = f"Context — species: {species}." if species else "No species context was provided."
     context += f" Sample/batch column: {batch_col!r}."
-    foreign = ", ".join(c[len("foreign_"):] for c in foreign_cols) or "none"
+    foreign = ", ".join(c[len("foreign_") :] for c in foreign_cols) or "none"
     return f"""You are a single-cell RNA-seq annotation expert doing the ZOOM-IN pass on ONE lineage. \
 The working directory holds lineage {lineage!r} (coarse labels {lineage_labels}) re-embedded on its own \
 — HVG/PCA/harmony/leiden/UMAP recomputed on just these cells, so substructure invisible in the global \
@@ -302,7 +364,7 @@ lineages can be transcriptionally close, so a high foreign score is compatible w
 doublet_score, intermediate profile, two lineages' markers co-expressed), ambient contamination (decontX), \
 a misassigned cluster (a clean, coherent population whose markers are simply the other lineage's — \
 reassign), or shared biology (keep). Decide from the full picture.
-Prior label columns in obs (reference only, never ground truth): {', '.join(prior_cols) or 'none'}.
+Prior label columns in obs (reference only, never ground truth): {", ".join(prior_cols) or "none"}.
 
 Reasoning chain per cluster:
 1. Distinctness — what does this cluster add over its {PARENT_KEY} parent? check_deg against its siblings; \
@@ -345,8 +407,24 @@ second look. Be conservative with reassign: only a clean, coherent population wi
 markers and low doublet evidence; mixed profiles are doublets, not reassignments."""
 
 
-async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_col, species, prior_cols,
-                     paga, pre_removed, foreign_cols, other_keys, language, model, effort, max_turns):
+async def _run_agent(
+    ad,
+    outdir,
+    lineage,
+    lineage_labels,
+    other_labels,
+    batch_col,
+    species,
+    prior_cols,
+    paga,
+    pre_removed,
+    foreign_cols,
+    other_keys,
+    language,
+    model,
+    effort,
+    max_turns,
+):
     from harness_bridge import AgentIncompleteError, ToolSpec, run_agent
 
     state = {"key": BASE_KEY, "n_sub": 0}
@@ -359,15 +437,45 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
         return cluster_order(ad.obs[state["key"]].astype(str))
 
     async def cluster_context(args):
-        return {"content": [{"type": "text", "text": _context(
-            ad, state["key"], str(args["cluster"]), batch_col, prior_cols, paga, pre_removed, foreign_cols,
-            lineage_labels, tables)}]}
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": _context(
+                        ad,
+                        state["key"],
+                        str(args["cluster"]),
+                        batch_col,
+                        prior_cols,
+                        paga,
+                        pre_removed,
+                        foreign_cols,
+                        lineage_labels,
+                        tables,
+                    ),
+                }
+            ]
+        }
 
     async def deg_lookup(args):
-        return {"content": [{"type": "text", "text": tables.lookup(
-            args.get("cluster", ""), args.get("gene", ""), args.get("view", "both"), args.get("key", ""),
-            args.get("top_n") or 20, args.get("min_logfc"), args.get("max_padj"), args.get("min_pct1"),
-            args.get("max_pct2"))}]}
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": tables.lookup(
+                        args.get("cluster", ""),
+                        args.get("gene", ""),
+                        args.get("view", "both"),
+                        args.get("key", ""),
+                        args.get("top_n") or 20,
+                        args.get("min_logfc"),
+                        args.get("max_padj"),
+                        args.get("min_pct1"),
+                        args.get("max_pct2"),
+                    ),
+                }
+            ]
+        }
 
     async def deg_sql(args):
         return {"content": [{"type": "text", "text": tables.sql(args.get("query", ""))}]}
@@ -388,22 +496,45 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
             parse_reference(reference, cur)
         except ValueError as exc:
             return {"content": [{"type": "text", "text": str(exc) + f"; current: {cur}"}], "is_error": True}
-        return {"content": [{"type": "text", "text": deg.table(
-            state["key"], c, reference, int(args.get("top_n") or 20), args.get("min_logfc"), args.get("max_padj"),
-            args.get("min_pct1"), args.get("max_pct2"))}]}
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": deg.table(
+                        state["key"],
+                        c,
+                        reference,
+                        int(args.get("top_n") or 20),
+                        args.get("min_logfc"),
+                        args.get("max_padj"),
+                        args.get("min_pct1"),
+                        args.get("max_pct2"),
+                    ),
+                }
+            ]
+        }
 
     async def check_stability(args):
-        return {"content": [{"type": "text",
-                             "text": stability_table(ad, str(args["cluster"]), state["key"],
-                                                      [k for k in other_keys if k != state["key"]])}]}
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": stability_table(
+                        ad, str(args["cluster"]), state["key"], [k for k in other_keys if k != state["key"]]
+                    ),
+                }
+            ]
+        }
 
     async def subcluster(args):
         c = str(args["cluster"])
         if c not in current():
-            return {"content": [{"type": "text", "text": f"unknown cluster {c!r}; current: {current()}"}],
-                    "is_error": True}
+            return {
+                "content": [{"type": "text", "text": f"unknown cluster {c!r}; current: {current()}"}],
+                "is_error": True,
+            }
         new_key = f"zmip_sub{state['n_sub'] + 1}"
-        n, text = _subcluster_once(ad, state["key"], c, float(args["resolution"]), new_key, pre_removed)
+        n, text = subcluster_once(ad, state["key"], c, float(args["resolution"]), new_key, pre_removed)
         if n >= 2:
             state["n_sub"] += 1
             state["key"] = new_key
@@ -421,8 +552,10 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
         cur = current()
         problems = _validate_cluster(e, cur, lineage_labels, other_labels)
         if problems:
-            return {"content": [{"type": "text", "text": "invalid, fix and resubmit:\n- " + "\n- ".join(problems)}],
-                    "is_error": True}
+            return {
+                "content": [{"type": "text", "text": "invalid, fix and resubmit:\n- " + "\n- ".join(problems)}],
+                "is_error": True,
+            }
         e["cluster_id"] = str(e["cluster_id"])
         e["merge_target"] = None if e["merge_target"] is None else str(e["merge_target"])
         e.setdefault("remove_reason", None)
@@ -430,17 +563,28 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
         entries[e["cluster_id"]] = e
         left = [c for c in cur if c not in entries]
         tag = e["action"] + (f"→{e['reassign_to']}" if e["action"] == "reassign" else "")
-        log.info(f"== [{lineage}] cluster {e['cluster_id']}: {e['coarse_label']} / {e['fine_label']} [{tag}"
-              f"{', merge→' + e['merge_target'] if e['merge_target'] else ''}]")
-        return {"content": [{"type": "text", "text": f"recorded {e['cluster_id']}; {len(entries)}/{len(cur)} "
-                             + (f"submitted, remaining: {left}" if left else "submitted — call finalize_annotation")}]}
+        log.info(
+            f"== [{lineage}] cluster {e['cluster_id']}: {e['coarse_label']} / {e['fine_label']} [{tag}"
+            f"{', merge→' + e['merge_target'] if e['merge_target'] else ''}]"
+        )
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"recorded {e['cluster_id']}; {len(entries)}/{len(cur)} "
+                    + (f"submitted, remaining: {left}" if left else "submitted — call finalize_annotation"),
+                }
+            ]
+        }
 
     async def finalize_annotation(args):
         cur = current()
         problems = _validate_final(entries, cur)
         if problems:
-            return {"content": [{"type": "text", "text": "not final yet:\n- " + "\n- ".join(problems)}],
-                    "is_error": True}
+            return {
+                "content": [{"type": "text", "text": "not final yet:\n- " + "\n- ".join(problems)}],
+                "is_error": True,
+            }
         # removal budget (msp/eca-rsi lesson: a round that deletes >~10% is
         # usually deleting biology) — soft: one forced second look, then the
         # agent's reaffirmed decision stands and is recorded as over budget
@@ -450,68 +594,148 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
         frac = float(rm_mask.mean())
         if frac > REMOVE_BUDGET and not holder.get("budget_warned"):
             holder["budget_warned"] = True
-            sizes = ", ".join(f"{c} (n={int((lab == c).sum())}, {entries[c].get('remove_reason')})" for c in rm_clusters)
-            return {"content": [{"type": "text", "text":
-                f"removal budget: you are removing {100 * frac:.1f}% of this lineage's cells beyond the pre-slated "
-                f"ones (budget {100 * REMOVE_BUDGET:.0f}%): {sizes}. Reconsider each: stress/immediate-early/ISG/"
-                "cycling STATES of a real cell type are biology unless QC is decisive (doublet_score, decontX, "
-                "mt%, depth) — keep them with a descriptive fine label (e.g. 'stressed ...') so a later round can "
-                "judge; remove only clusters whose evidence is decisive (doublets, low-quality, ambient). Resubmit "
-                "what you change, then call finalize_annotation again; if you reaffirm all removals, the second "
-                "call is accepted and recorded as over budget."}], "is_error": True}
-        comp = _components(entries)
+            sizes = ", ".join(
+                f"{c} (n={int((lab == c).sum())}, {entries[c].get('remove_reason')})" for c in rm_clusters
+            )
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"removal budget: you are removing {100 * frac:.1f}% of this lineage's cells beyond the pre-slated "
+                        f"ones (budget {100 * REMOVE_BUDGET:.0f}%): {sizes}. Reconsider each: stress/immediate-early/ISG/"
+                        "cycling STATES of a real cell type are biology unless QC is decisive (doublet_score, decontX, "
+                        "mt%, depth) — keep them with a descriptive fine label (e.g. 'stressed ...') so a later round can "
+                        "judge; remove only clusters whose evidence is decisive (doublets, low-quality, ambient). Resubmit "
+                        "what you change, then call finalize_annotation again; if you reaffirm all removals, the second "
+                        "call is accepted and recorded as over budget.",
+                    }
+                ],
+                "is_error": True,
+            }
+        comp = components(entries)
         groups = sorted({tuple(v) for v in comp.values() if len(v) > 1}, key=lambda t: float(str(t[0]).split(",")[0]))
-        holder["proposal"] = {"cluster_key": state["key"], "parent_key": PARENT_KEY, "lineage": lineage,
-                              "lineage_labels": list(lineage_labels),
-                              "clusters": [entries[c] for c in cur],
-                              "merged_groups": ["+".join(g) for g in groups],
-                              "agent_removed_fraction": round(frac, 4),
-                              "budget_exceeded": frac > REMOVE_BUDGET,
-                              "overall": str(args.get("overall") or "")}
+        holder["proposal"] = {
+            "cluster_key": state["key"],
+            "parent_key": PARENT_KEY,
+            "lineage": lineage,
+            "lineage_labels": list(lineage_labels),
+            "clusters": [entries[c] for c in cur],
+            "merged_groups": ["+".join(g) for g in groups],
+            "agent_removed_fraction": round(frac, 4),
+            "budget_exceeded": frac > REMOVE_BUDGET,
+            "overall": str(args.get("overall") or ""),
+        }
         if frac > REMOVE_BUDGET:
-            log.warning(f"== [{lineage}] WARNING: agent removes {100 * frac:.1f}% of the lineage (budget "
-                  f"{100 * REMOVE_BUDGET:.0f}%) — reaffirmed, recorded as budget_exceeded")
+            log.warning(
+                f"== [{lineage}] WARNING: agent removes {100 * frac:.1f}% of the lineage (budget "
+                f"{100 * REMOVE_BUDGET:.0f}%) — reaffirmed, recorded as budget_exceeded"
+            )
         with open(os.path.join(outdir, "annotation_proposal.json"), "w") as fh:
             json.dump(holder["proposal"], fh, ensure_ascii=False, indent=2)
         return {"content": [{"type": "text", "text": "accepted"}], "_submitted": holder["proposal"]}
 
     tools = [
-        ToolSpec("cluster_context", "Non-expression context for one current cluster: size, removal share, r1.0 "
-                 "parent + siblings, PAGA neighbours, samples, QC medians, foreign-lineage scores, previous-round "
-                 "labels, prior label compositions.", {"cluster": str}, cluster_context),
-        ToolSpec("deg_lookup", DEG_TOOL_DOC,
-                 {"cluster": str, "gene": str, "view": str, "key": str, "top_n": int, "min_logfc": float,
-                  "max_padj": float, "min_pct1": float, "max_pct2": float}, deg_lookup),
+        ToolSpec(
+            "cluster_context",
+            "Non-expression context for one current cluster: size, removal share, r1.0 "
+            "parent + siblings, PAGA neighbours, samples, QC medians, foreign-lineage scores, previous-round "
+            "labels, prior label compositions.",
+            {"cluster": str},
+            cluster_context,
+        ),
+        ToolSpec(
+            "deg_lookup",
+            DEG_TOOL_DOC,
+            {
+                "cluster": str,
+                "gene": str,
+                "view": str,
+                "key": str,
+                "top_n": int,
+                "min_logfc": float,
+                "max_padj": float,
+                "min_pct1": float,
+                "max_pct2": float,
+            },
+            deg_lookup,
+        ),
         ToolSpec("deg_sql", DEG_SQL_DOC, {"query": str}, deg_sql),
-        ToolSpec("check_genes", "Per-cluster mean expression and expressing-cell fraction for the given genes "
-                 "(case-insensitive), on the current clustering.", {"genes": list}, check_genes),
-        ToolSpec("check_deg", "On-demand wilcoxon DEG for one current cluster. reference='rest' (default) or a "
-                 'single exact current ID or a CSV list. Quote IDs containing commas in pooled references, '
-                 'e.g. "5,0","5,1". Ambiguous unquoted lists are rejected. Cells already slated for '
-                 "removal are excluded. Thresholds (0/empty = off): min_logfc, max_padj, min_pct1, max_pct2 — "
-                 "ask for exactly the gene list you need. Cached per (cluster, reference).",
-                 {"cluster": str, "reference": str, "top_n": int, "min_logfc": float, "max_padj": float,
-                  "min_pct1": float, "max_pct2": float}, check_deg),
-        ToolSpec("check_stability", "How one current cluster decomposes across the other leiden resolutions "
-                 "of this subset (r0.3/r1.0/r2.0).", {"cluster": str}, check_stability),
-        ToolSpec("subcluster", "Split one heterogeneous current cluster with leiden restrict_to at the given "
-                 'resolution (0.3-1.0 typical). New ids look like "5,0"; tools and submissions follow the refined '
-                 "clustering; the parent's submission (if any) is discarded.", {"cluster": str, "resolution": float},
-                 subcluster),
-        ToolSpec("submit_cluster", "Submit (or resubmit — last wins) ONE current cluster. cluster_json schema:\n"
-                 + _CLUSTER_SCHEMA_DOC, {"cluster_json": str}, submit_cluster),
-        ToolSpec("finalize_annotation", "Validate everything together and finish. overall = short assessment "
-                 "of this lineage.", {"overall": str}, finalize_annotation),
+        ToolSpec(
+            "check_genes",
+            "Per-cluster mean expression and expressing-cell fraction for the given genes "
+            "(case-insensitive), on the current clustering.",
+            {"genes": list},
+            check_genes,
+        ),
+        ToolSpec(
+            "check_deg",
+            "On-demand wilcoxon DEG for one current cluster. reference='rest' (default) or a "
+            "single exact current ID or a CSV list. Quote IDs containing commas in pooled references, "
+            'e.g. "5,0","5,1". Ambiguous unquoted lists are rejected. Cells already slated for '
+            "removal are excluded. Thresholds (0/empty = off): min_logfc, max_padj, min_pct1, max_pct2 — "
+            "ask for exactly the gene list you need. Cached per (cluster, reference).",
+            {
+                "cluster": str,
+                "reference": str,
+                "top_n": int,
+                "min_logfc": float,
+                "max_padj": float,
+                "min_pct1": float,
+                "max_pct2": float,
+            },
+            check_deg,
+        ),
+        ToolSpec(
+            "check_stability",
+            "How one current cluster decomposes across the other leiden resolutions of this subset (r0.3/r1.0/r2.0).",
+            {"cluster": str},
+            check_stability,
+        ),
+        ToolSpec(
+            "subcluster",
+            "Split one heterogeneous current cluster with leiden restrict_to at the given "
+            'resolution (0.3-1.0 typical). New ids look like "5,0"; tools and submissions follow the refined '
+            "clustering; the parent's submission (if any) is discarded.",
+            {"cluster": str, "resolution": float},
+            subcluster,
+        ),
+        ToolSpec(
+            "submit_cluster",
+            "Submit (or resubmit — last wins) ONE current cluster. cluster_json schema:\n" + _CLUSTER_SCHEMA_DOC,
+            {"cluster_json": str},
+            submit_cluster,
+        ),
+        ToolSpec(
+            "finalize_annotation",
+            "Validate everything together and finish. overall = short assessment of this lineage.",
+            {"overall": str},
+            finalize_annotation,
+        ),
     ]
     try:
         result = await run_agent(
-            tools=tools, submit_tool="finalize_annotation",
+            tools=tools,
+            submit_tool="finalize_annotation",
             prompt=f"Zoom-in annotate lineage {lineage!r}: one Task per base cluster, submit_cluster each, "
-                   "then finalize_annotation.",
-            system_prompt=_system_prompt(outdir, lineage, lineage_labels, other_labels, current(), batch_col,
-                                         species, prior_cols, foreign_cols, language),
-            cwd=os.path.abspath(outdir), model=model, effort=effort, max_turns=max_turns,
-            allowed_builtin=("read", "glob", "grep", "tasks"), label=f"zmip {lineage}",
+            "then finalize_annotation.",
+            system_prompt=_system_prompt(
+                outdir,
+                lineage,
+                lineage_labels,
+                other_labels,
+                current(),
+                batch_col,
+                species,
+                prior_cols,
+                foreign_cols,
+                language,
+            ),
+            cwd=os.path.abspath(outdir),
+            model=model,
+            effort=effort,
+            max_turns=max_turns,
+            allowed_builtin=("read", "glob", "grep", "tasks"),
+            label=f"zmip {lineage}",
             max_buffer_size=50_000_000,
         )
     except AgentIncompleteError as e:
@@ -524,26 +748,57 @@ async def _run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_co
 
 # ---------------------------------------------------------------- entry
 
-def annotate_lineage(ad, outdir, lineage, lineage_labels, other_labels, foreign_cols, species=None,
-                     language="English", model=None, effort=None, max_turns=200):
+
+def annotate_lineage(
+    ad,
+    outdir,
+    lineage,
+    lineage_labels,
+    other_labels,
+    foreign_cols,
+    species=None,
+    language="English",
+    model=None,
+    effort=None,
+    max_turns=200,
+):
     """ad: the lineage subset AFTER msp.integrate_adata (+ foreign scores).
     Writes annotation_* artifacts, annotated.h5ad and report.html into
     outdir; returns (proposal, removed_df, reassigned_df)."""
     batch_col = ad.uns["msp"]["batch_col"]
     other_keys = [k for k in ad.obs.columns if k.startswith("msp_leiden_r")]
     pre_removed = load_removal_mask(outdir, ad)
-    prior_cols = [c for c in _prior_label_columns(ad, batch_col) if not c.endswith(PREV_SUFFIX)]
+    prior_cols = [c for c in prior_label_columns(ad, batch_col) if not c.endswith(PREV_SUFFIX)]
     paga = load_paga_neighbors(outdir, BASE_KEY)
-    log.info(f"== [{lineage}] {int(pre_removed.sum())}/{ad.n_obs} cells pre-slated for removal; "
-          f"prior cols {prior_cols}; foreign {foreign_cols}")
-    proposal = asyncio.run(_run_agent(ad, outdir, lineage, lineage_labels, other_labels, batch_col, species,
-                                      prior_cols, paga, pre_removed, foreign_cols, other_keys, language,
-                                      model or default_model(), effort, max_turns))
+    log.info(
+        f"== [{lineage}] {int(pre_removed.sum())}/{ad.n_obs} cells pre-slated for removal; "
+        f"prior cols {prior_cols}; foreign {foreign_cols}"
+    )
+    proposal = asyncio.run(
+        _run_agent(
+            ad,
+            outdir,
+            lineage,
+            lineage_labels,
+            other_labels,
+            batch_col,
+            species,
+            prior_cols,
+            paga,
+            pre_removed,
+            foreign_cols,
+            other_keys,
+            language,
+            model or default_model(),
+            effort,
+            max_turns,
+        )
+    )
     removed, reassigned = _apply(ad, proposal["cluster_key"], proposal, pre_removed, lineage)
     removed.to_csv(os.path.join(outdir, "annotation_removed.csv"), index=False)
     reassigned.to_csv(os.path.join(outdir, "annotation_reassigned.csv"), index=False)
     kept = ad[(ad.obs["msp_ann_action"] == "keep").values].copy()
-    _plot(ad, kept, os.path.join(outdir, "figures"))
+    plot_annotation(ad, kept, os.path.join(outdir, "figures"))
     tmp = os.path.join(outdir, "annotated.tmp.h5ad")
     kept.write_h5ad(tmp)
     os.replace(tmp, os.path.join(outdir, "annotated.h5ad"))

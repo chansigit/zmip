@@ -18,16 +18,16 @@ import logging
 import os
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scanpy as sc
-
-from msp.annotate import _palette
 from msp.plots import UMAP_DPI, save_single_umap, umap_axes
 
 from . import publication
+from .msp_compat import palette
 
 log = logging.getLogger(__name__)
 
@@ -88,8 +88,13 @@ def _validate_annotation(name, survivors, reassigned, own_labels, all_labels):
     report("CSV target differs from H5AD", moved & audited & audit["reassign_to"].ne(target))
     report("CSV fine label differs from H5AD", moved & audited & audit["fine_label"].ne(survivors["msp_ann_fine"]))
     # Audit cluster IDs are pre-merge; msp_ann_cluster can contain a '+'-joined component.
-    cluster_matches = pd.Series([str(c) in str(merged).split("+") for c, merged in
-                                 zip(audit["cluster"], survivors["msp_ann_cluster"])], index=survivors.index)
+    cluster_matches = pd.Series(
+        [
+            str(c) in str(merged).split("+")
+            for c, merged in zip(audit["cluster"], survivors["msp_ann_cluster"], strict=False)
+        ],
+        index=survivors.index,
+    )
     report("CSV cluster is not in the H5AD merged cluster", moved & audited & ~cluster_matches)
     if problems:
         raise ValueError(f"lineage {name!r} has inconsistent annotation decisions:\n- " + "\n- ".join(problems))
@@ -107,8 +112,10 @@ def merge_back(ad, plan, results, outdir, coarse_col="msp_ann_coarse", fine_col=
         raise ValueError("plan must assign unique lineage names and each coarse label exactly once")
     zoomed = {ln["name"] for ln in plan["lineages"] if ln["zoom"]}
     if set(results) != zoomed:
-        raise ValueError(f"lineage results do not match the zoom plan: missing {sorted(zoomed - set(results))}, "
-                         f"unexpected {sorted(set(results) - zoomed)}")
+        raise ValueError(
+            f"lineage results do not match the zoom plan: missing {sorted(zoomed - set(results))}, "
+            f"unexpected {sorted(set(results) - zoomed)}"
+        )
     label_to_lineage = {lab: ln["name"] for ln in plan["lineages"] for lab in ln["coarse_labels"]}
     obs = ad.obs
     coarse0 = obs[coarse_col].astype(str)
@@ -158,10 +165,16 @@ def merge_back(ad, plan, results, outdir, coarse_col="msp_ann_coarse", fine_col=
     obs["zmip_reassigned_from"] = zfrom.astype("category")
     obs["zmip_action"] = pd.Categorical(np.where(removed, "remove", "keep"), categories=["keep", "remove"])
 
-    rm_all = pd.concat(rm_frames, ignore_index=True) if rm_frames else pd.DataFrame(
-        columns=["cell", "lineage", "cluster", "preannotation", "annotate_remove", "remove_reason"])
-    ra_all = pd.concat(ra_frames, ignore_index=True) if ra_frames else pd.DataFrame(
-        columns=["cell", "lineage", "cluster", "reassign_to", "fine_label"])
+    rm_all = (
+        pd.concat(rm_frames, ignore_index=True)
+        if rm_frames
+        else pd.DataFrame(columns=["cell", "lineage", "cluster", "preannotation", "annotate_remove", "remove_reason"])
+    )
+    ra_all = (
+        pd.concat(ra_frames, ignore_index=True)
+        if ra_frames
+        else pd.DataFrame(columns=["cell", "lineage", "cluster", "reassign_to", "fine_label"])
+    )
     kept = ad[~removed].copy()
     for col in ("zmip_ann_coarse", "zmip_ann_fine", "zmip_lineage"):
         kept.obs[col] = kept.obs[col].cat.remove_unused_categories()
@@ -185,37 +198,57 @@ def merge_back(ad, plan, results, outdir, coarse_col="msp_ann_coarse", fine_col=
             if not (stage / "report.html").is_file():
                 raise ValueError("global report was not written")
         publication.publish(outdir, stage)
-    log.info(f"== merged: removed {int(removed.sum())}, reassigned {len(ra_all)}, "
-          f"annotated_zmip.h5ad keeps {kept.n_obs}/{ad.n_obs}")
+    log.info(
+        f"== merged: removed {int(removed.sum())}, reassigned {len(ra_all)}, "
+        f"annotated_zmip.h5ad keeps {kept.n_obs}/{ad.n_obs}"
+    )
     return kept, rm_all, ra_all
 
 
 def _figures(ad, kept, figdir):
     for col, fname in (("zmip_ann_coarse", "zmip_umap_coarse.png"), ("zmip_lineage", "zmip_umap_lineage.png")):
-        pal = _palette(kept, col)
+        pal = palette(kept, col)
         if pal:
             kept.uns[f"{col}_colors"] = pal
         n = kept.obs[col].nunique()
-        save_single_umap(kept, col, os.path.join(figdir, fname), repel=True,
-                         repel_fontsize=9 if n > 12 else 11, figsize=(9, 9) if n > 12 else None)
+        save_single_umap(
+            kept,
+            col,
+            os.path.join(figdir, fname),
+            repel=True,
+            repel_fontsize=9 if n > 12 else 11,
+            figsize=(9, 9) if n > 12 else None,
+        )
     # fine labels are far too many for on-data text (dozens across lineages):
     # number them (ordered by coarse label, then size) and ship the legend
     # as zmip_fine_legend.csv for the report to render next to the panel
-    legend = (kept.obs.groupby(["zmip_ann_coarse", "zmip_ann_fine"], observed=True).size().rename("n_cells")
-              .reset_index().sort_values(["zmip_ann_coarse", "n_cells"], ascending=[True, False]))
+    legend = (
+        kept.obs.groupby(["zmip_ann_coarse", "zmip_ann_fine"], observed=True)
+        .size()
+        .rename("n_cells")
+        .reset_index()
+        .sort_values(["zmip_ann_coarse", "n_cells"], ascending=[True, False])
+    )
     legend.insert(0, "id", range(1, len(legend) + 1))
     legend.to_csv(os.path.join(os.path.dirname(figdir), "zmip_fine_legend.csv"), index=False)
     # Fine names may repeat across independently annotated lineages.
     label_cols = ["zmip_ann_coarse", "zmip_ann_fine"]
-    id_of = dict(zip(legend[label_cols].itertuples(index=False, name=None), legend["id"].astype(str)))
+    id_of = dict(zip(legend[label_cols].itertuples(index=False, name=None), legend["id"].astype(str), strict=False))
     fine_ids = [id_of[pair] for pair in kept.obs[label_cols].itertuples(index=False, name=None)]
     kept.obs["_fine_id"] = pd.Categorical(fine_ids, categories=legend["id"].astype(str).tolist())
-    pal = _palette(kept, "zmip_ann_fine")
+    pal = palette(kept, "zmip_ann_fine")
     if pal:  # same colour per fine label as its id
-        by_fine = dict(zip(kept.obs["zmip_ann_fine"].cat.categories, pal))
+        by_fine = dict(zip(kept.obs["zmip_ann_fine"].cat.categories, pal, strict=False))
         kept.uns["_fine_id_colors"] = [by_fine[f] for f in legend["zmip_ann_fine"]]
-    save_single_umap(kept, "_fine_id", os.path.join(figdir, "zmip_umap_fine.png"), repel=True,
-                     repel_fontsize=9, figsize=(9, 9), title="zmip_ann_fine (ids: see legend)")
+    save_single_umap(
+        kept,
+        "_fine_id",
+        os.path.join(figdir, "zmip_umap_fine.png"),
+        repel=True,
+        repel_fontsize=9,
+        figsize=(9, 9),
+        title="zmip_ann_fine (ids: see legend)",
+    )
     del kept.obs["_fine_id"]
     kept.uns.pop("_fine_id_colors", None)
     xy = np.asarray(ad.obsm["X_umap"])
@@ -241,8 +274,7 @@ def _figures(ad, kept, figdir):
         cmap = plt.get_cmap("tab10")
         for i, p in enumerate(pd.unique(pairs.dropna())):
             m = (pairs == p).values
-            ax.scatter(xy[m, 0], xy[m, 1], s=2 * base, c=[cmap(i % 10)], linewidths=0,
-                       label=f"{p} (n={int(m.sum())})")
+            ax.scatter(xy[m, 0], xy[m, 1], s=2 * base, c=[cmap(i % 10)], linewidths=0, label=f"{p} (n={int(m.sum())})")
     ax.set_title("UMAP: cells reassigned between lineages")
     ax.legend(loc="upper right", fontsize=7, framealpha=0.9)
     fig.savefig(os.path.join(figdir, "zmip_umap_reassigned.png"), dpi=UMAP_DPI)

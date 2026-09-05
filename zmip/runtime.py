@@ -4,12 +4,34 @@ import hashlib
 import importlib.metadata
 import importlib.util
 import json
-from pathlib import Path
 import platform
+from pathlib import Path
 
-PACKAGES = ("zmip", "msp-sc", "agent-harness-bridge", "standissect-lite", "scanpy", "anndata",
-            "numpy", "scipy", "pandas", "h5py", "numba", "scikit-learn", "igraph", "leidenalg",
-            "harmonypy", "torch", "matplotlib", "openai", "openai-agents", "mcp", "claude-agent-sdk")
+# Schema 1 deliberately retains torch as a legacy identity field. Removing it
+# requires an explicit schema migration; it is not a runtime dependency.
+PACKAGES = (
+    "zmip",
+    "msp-sc",
+    "agent-harness-bridge",
+    "standissect-lite",
+    "scanpy",
+    "anndata",
+    "numpy",
+    "scipy",
+    "pandas",
+    "h5py",
+    "numba",
+    "scikit-learn",
+    "igraph",
+    "leidenalg",
+    "harmonypy",
+    "torch",
+    "matplotlib",
+    "openai",
+    "openai-agents",
+    "mcp",
+    "claude-agent-sdk",
+)
 SOURCE_MODULES = ("zmip", "msp", "harness_bridge", "standissect_lite")
 
 
@@ -44,8 +66,9 @@ def check_runtime():
         from msp.evidence import DegCache, DegTables, parse_reference
         from msp.integrate import integrate_adata
 
-        assert all(callable(f) for f in (ToolSpec, resolve_agent_config, run_agent, DegCache,
-                                         DegTables, integrate_adata))
+        assert all(
+            callable(f) for f in (ToolSpec, resolve_agent_config, run_agent, DegCache, DegTables, integrate_adata)
+        )
         known = ["5", "0", "1", "5,0", "5,1"]
         if parse_reference("5,1", known) != ("5,1",):
             raise ValueError("MSP splits exact subcluster IDs")
@@ -58,8 +81,10 @@ def check_runtime():
         else:
             raise ValueError("MSP accepts ambiguous pooled subcluster IDs")
     except (ImportError, AttributeError, TypeError, ValueError, AssertionError) as exc:
-        raise RuntimeError("incompatible MSP/harness runtime; install the tested source wheels with "
-                           "scripts/validate_install.sh (see README). Details: " + str(exc)) from exc
+        raise RuntimeError(
+            "incompatible MSP/harness runtime; install the tested source wheels with "
+            "scripts/validate_install.sh (see README). Details: " + str(exc)
+        ) from exc
 
 
 if __name__ == "__main__":

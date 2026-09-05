@@ -1,9 +1,9 @@
 """Fault-injection tests for complete output sets and runtime-aware resume."""
 
 import json
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -45,7 +45,7 @@ def test_hard_exit_is_recovered_before_results_are_trusted(tmp_path, previous):
         publish_example(tmp_path, "old")
         before = snapshot(tmp_path)
     # os._exit deliberately skips all finally blocks, as SIGKILL would.
-    script = '''
+    script = """
 import os, sys
 from pathlib import Path
 from zmip import publication
@@ -60,7 +60,7 @@ with publication.staging(root) as stage:
     for name in (*publication.DATA_FILES, "report.html"):
         (stage / name).write_text("new " + name)
     publication.publish(root, stage)
-'''
+"""
     result = subprocess.run([sys.executable, "-c", script, str(tmp_path)], check=False)
     assert result.returncode == 17
     assert not publication.complete(tmp_path)
