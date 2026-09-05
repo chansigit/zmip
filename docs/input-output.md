@@ -14,7 +14,9 @@ and `--species` when needed.
 The plan assigns every coarse label exactly once, using label counts,
 UMAP islands, graph connectivity, and PAGA as evidence. Pooling labels from
 separate islands is rejected; splitting labels on one island requires the
-agent's explicit confirmation, recorded as a warning. `--min-cells` controls
+agent's explicit confirmation, recorded as a warning. Lineage names become
+output directories; names that map to `figures` or start with a dot are
+rejected. `--min-cells` controls
 which lineages are large enough to reanalyze. If none qualify, existing
 labels pass through and marker computation is skipped.
 

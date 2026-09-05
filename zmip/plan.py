@@ -53,13 +53,14 @@ HOME_FRAC = 0.30         # an island holding ≥ this share of a label's cells i
 
 
 def _lineage_slugs(names):
-    """Keep existing directory names, rejecting unsafe or ambiguous mappings."""
+    """Keep existing directory names, rejecting unsafe or ambiguous mappings.
+    Dot-prefixed directories are reserved for receipts, locks and publication state."""
     result, owners = {}, {}
     for name in names:
         if not isinstance(name, str) or not name.strip():
             raise ValueError("lineage name must be a non-empty string")
         directory = slug(name)
-        if directory in (".", "..", "figures"):
+        if directory.startswith(".") or directory == "figures":
             raise ValueError(f"lineage name {name!r} maps to reserved directory {directory!r}")
         if directory in owners:
             raise ValueError(f"lineage names {owners[directory]!r} and {name!r} share directory {directory!r}")

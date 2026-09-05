@@ -90,8 +90,6 @@ def subset_for(ad, labels, coarse_col, fine_col):
     for c in PREVIOUS_COLS:
         src = {"msp_ann_coarse": coarse_col, "msp_ann_fine": fine_col}[c]
         sub.obs[c + PREV_SUFFIX] = sub.obs[src].astype(str).astype("category")
-    if "_zmip_lineage" in sub.obs:
-        del sub.obs["_zmip_lineage"]
     return sub
 
 

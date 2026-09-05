@@ -77,12 +77,18 @@ out = os.path.abspath(args.outdir)
 with cache.lock_run(out):
     publication.recover(out)
     # Check the on-disk input before loading or modifying any scientific outputs.
-    options = {k: v for k, v in vars(args).items() if k not in {"h5ad", "outdir", "force", "report_context"}}
-    options["harness"] = agent_config.harness
-    options["harness_options"] = {k: os.environ.get(k) for k in ("DSH_PROVIDER", "OPENAI_AGENTS_API")}
+    # Agent settings steer how decisions are produced; they are recorded for the audit trail
+    # but do not invalidate finished stages (raising --max-turns must not force a full rerun).
+    agent_keys = {"model", "effort", "max_turns", "language"}
+    options = {k: v for k, v in vars(args).items()
+               if k not in {"h5ad", "outdir", "force", "report_context"} | agent_keys}
+    agent = {k: getattr(args, k) for k in sorted(agent_keys)}
+    agent["harness"] = agent_config.harness
+    agent["harness_options"] = {k: os.environ.get(k) for k in ("DSH_PROVIDER", "OPENAI_AGENTS_API")}
     # Endpoint identity matters, but do not copy URLs (possibly containing credentials) into receipts.
-    options["endpoint_sha256"] = hashlib.sha256(os.environ.get("DOUBAO_BASE_URL", "").encode()).hexdigest()
-    generation = cache.prepare_run(out, args.h5ad, options, force=args.force)
+    agent["endpoint_sha256"] = {k: hashlib.sha256(os.environ.get(k, "").encode()).hexdigest()
+                                for k in ("DOUBAO_BASE_URL", "ANTHROPIC_BASE_URL")}
+    generation = cache.prepare_run(out, args.h5ad, options, force=args.force, agent=agent)
     write_report_context(out, args.report_context)
     ad = sc.read_h5ad(args.h5ad)
     if not ad.obs_names.is_unique:
@@ -127,6 +133,8 @@ with cache.lock_run(out):
         markers = lineage_markers(ad, "_zmip_lineage", out)
 
     cache.seal(out, "markers", marker_generation, ["lineage_markers.csv"])
+    # The planning helper column must not leak into the published H5AD.
+    del ad.obs["_zmip_lineage"]
 
     all_labels = set(label_to_lineage)
     results = {}

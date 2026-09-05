@@ -56,8 +56,12 @@ options, Python/dependency versions, and source hashes for ZMIP, MSP, the
 harness, and standissect-lite. Changes to editable sources also invalidate
 reuse. Input, option, runtime changes, or legacy directories without receipts
 require a new output directory or `--force`, which recomputes the plan,
-markers, and all selected lineages. Hash verification adds sequential file
-reads without loading a second expression matrix.
+markers, and all selected lineages. Agent settings (`--model`, `--effort`,
+`--max-turns`, `--language`, the harness and hashed endpoint URLs) are
+recorded in the run receipt for the audit trail but do not invalidate
+finished stages, so a lineage that stopped at its turn limit can be resumed
+with a larger budget. Hash verification adds sequential file reads without
+loading a second expression matrix.
 
 ## Failed and interrupted runs
 

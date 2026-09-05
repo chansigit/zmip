@@ -58,6 +58,13 @@ def _validate_annotation(name, survivors, reassigned, own_labels, all_labels):
     required = {"msp_ann_cluster", "msp_ann_coarse", "msp_ann_fine"}
     if not required.issubset(survivors) or not {"cell", "cluster", "reassign_to", "fine_label"}.issubset(reassigned):
         raise ValueError(f"lineage {name!r}: missing annotation/audit columns")
+    # The H5AD returns these as categoricals with differing category sets, which pandas
+    # refuses to compare. Work on plain text throughout; missing values stay missing.
+    survivors = survivors.copy()
+    for col in (*required, "zmip_reassigned_to"):
+        if col in survivors:
+            survivors[col] = survivors[col].astype(object)
+    reassigned = reassigned.astype(object)
     problems = []
 
     def report(label, mask):

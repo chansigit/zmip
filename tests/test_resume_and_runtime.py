@@ -33,6 +33,9 @@ def test_resume_checks_input_contents_options_and_legacy_outputs(tmp_path):
     root = tmp_path / "out"
     generation = cache.prepare_run(root, source, {"resolutions": (1., 2.)})
     assert cache.prepare_run(root, source, {"resolutions": [1., 2.]}) == generation
+    # Agent settings are audit information: refreshed, never compared.
+    assert cache.prepare_run(root, source, {"resolutions": [1., 2.]}, agent={"max_turns": 80}) == generation
+    assert json.loads((root / ".zmip-run.json").read_text())["agent"] == {"max_turns": 80}
     source.write_bytes(b"other input")
     with pytest.raises(ValueError, match="input or options changed"):
         cache.prepare_run(root, source, {"resolutions": [1., 2.]})
@@ -338,6 +341,11 @@ def test_cli_resume_reruns_only_damaged_lineage_and_force_replans(tmp_path, monk
     run()
     run()
     assert calls == {"plan": 1, "markers": 1, "lineages": ["A", "B"]}
+    # A different turn budget, model or report language resumes without recomputing anything.
+    monkeypatch.setattr(sys, "argv", argv + ["--max-turns", "5", "--language", "Chinese", "--model", "other"])
+    runpy.run_module("zmip", run_name="__main__")
+    assert calls == {"plan": 1, "markers": 1, "lineages": ["A", "B"]}
+    assert json.loads((root / ".zmip-run.json").read_text())["agent"]["max_turns"] == 5
     (root / "A" / "annotation_removed.csv").write_text("damaged\n")
     run()
     assert calls == {"plan": 1, "markers": 1, "lineages": ["A", "B", "A"]}

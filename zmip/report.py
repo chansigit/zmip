@@ -220,12 +220,8 @@ def generate_report(outdir, out_html=None, title=None, *, result_dir=None):
     sections, toc = _number([s for s in sections if s])
     from msp.report import compose_title
 
-    if title is None:
-        parent_plan = os.path.join(os.path.dirname(os.path.abspath(outdir)), "zmip_plan.json")
-        if plan is None and os.path.isfile(parent_plan):  # a per-lineage sub-report
-            title = compose_title("zoom-in lineage (zmip)", outdir, subject=os.path.basename(os.path.abspath(outdir)))
-        else:
-            title = compose_title("zoom-in by lineage (zmip)", outdir)
+    # Per-lineage reports are MSP reports (see zmip.annotate); this module renders the global one only.
+    title = title or compose_title("zoom-in by lineage (zmip)", outdir)
     header = (f"<h1>{html.escape(title)}</h1>"
               f'<p class="meta">source dir: {html.escape(os.path.abspath(outdir))}</p>')
     body = f'{header}<div class="layout">{toc}<div class="content">{"".join(sections)}</div></div>'

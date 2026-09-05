@@ -89,10 +89,12 @@ run. Global plots retain MSP's embedding. See the
 
 ## Can I resume a run?
 
-Repeat the same command to reuse completed, verified stages. If you change
-the input, analysis settings, or runtime, use a new output directory to keep
-both analyses, or add `--force` to recompute the plan and all selected
-lineages. To rebuild only the global report, run:
+Repeat the same command to reuse completed, verified stages. Agent settings
+such as `--max-turns` or `--model` may differ between runs; only unfinished
+lineages use the new values. If you change the input, analysis settings, or
+runtime, use a new output directory to keep both analyses, or add `--force`
+to recompute the plan and all selected lineages. To rebuild only the global
+report, run:
 
 ```bash
 python -m zmip.report zmip_out

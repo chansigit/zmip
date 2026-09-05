@@ -44,8 +44,12 @@ def write_json(path, value):
     os.replace(temporary, path)
 
 
-def prepare_run(outdir, input_path, options, force=False):
-    """Reject unverifiable reuse; force starts a new generation before any work."""
+def prepare_run(outdir, input_path, options, force=False, agent=None):
+    """Reject unverifiable reuse; force starts a new generation before any work.
+
+    `agent` (model, effort, turn budget, harness, endpoint hashes) is recorded for
+    the audit trail and refreshed on every run, but never compared: it steers how
+    decisions are produced without changing what a finished stage means."""
     root = Path(outdir)
     root.mkdir(parents=True, exist_ok=True)
     identity = {"input_sha256": file_digest(input_path), "options": options, "runtime": runtime_identity()}
@@ -61,11 +65,13 @@ def prepare_run(outdir, input_path, options, force=False):
             if not isinstance(previous, dict) or previous.get("identity") != identity or not previous.get("run_id"):
                 raise ValueError("input or options changed, or runtime/code changed; "
                                  "use a new output directory or --force")
+            if agent is not None and previous.get("agent") != agent:
+                write_json(path, {**previous, "agent": agent})
             return previous["run_id"]
         if any(root.glob("*.h5ad")) or (root / "zmip_plan.json").exists() or any(root.glob("*/annotated.h5ad")):
             raise ValueError("legacy outputs have no resume record; use a new output directory or --force")
     run_id = uuid.uuid4().hex
-    write_json(path, {"identity": identity, "run_id": run_id})
+    write_json(path, {"identity": identity, "run_id": run_id, "agent": agent})
     return run_id
 
 

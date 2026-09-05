@@ -33,7 +33,8 @@ def cluster(cid="0", **updates):
     return entry
 
 
-@pytest.mark.parametrize("names", [("T/B", "T B"), ("..", "B"), (".", "B"), ("figures", "B")])
+@pytest.mark.parametrize("names", [("T/B", "T B"), ("..", "B"), (".", "B"), ("figures", "B"),
+                                   (".zmip-publish", "B"), (".hidden", "B")])
 def test_plan_rejects_unsafe_or_colliding_directories(names):
     problems, normalized = validate(make_plan(names))
     assert problems and normalized is None

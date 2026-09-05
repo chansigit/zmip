@@ -33,8 +33,10 @@ def merge_case(tmp_path, monkeypatch):
     ad.uns["audit"] = "original"
     plan = {"lineages": [{"name": "A", "coarse_labels": ["A"], "zoom": True},
                           {"name": "B", "coarse_labels": ["B"], "zoom": False}]}
-    survivors = pd.DataFrame({"msp_ann_cluster": ["0"], "msp_ann_coarse": ["B"],
-                               "msp_ann_fine": ["new B"], "zmip_reassigned_to": ["B"]}, index=["001"])
+    # Categorical like the real lineage output (annotate._apply); anndata keeps the dtype on disk.
+    survivors = pd.DataFrame({"msp_ann_cluster": pd.Categorical(["0"]), "msp_ann_coarse": pd.Categorical(["B"]),
+                               "msp_ann_fine": pd.Categorical(["new B"]),
+                               "zmip_reassigned_to": pd.Categorical(["B"])}, index=["001"])
     removed = pd.DataFrame({"cell": ["002"], "lineage": ["A"], "cluster": ["1"],
                             "preannotation": [False], "annotate_remove": [True], "remove_reason": ["doublet"]})
     reassigned = pd.DataFrame({"cell": ["001"], "lineage": ["A"], "cluster": ["0"],
@@ -96,6 +98,36 @@ def test_merge_rejects_inconsistent_reassignment_decisions(merge_case, tmp_path,
     with pytest.raises(ValueError, match="inconsistent annotation decisions"):
         merge.merge_back(ad, plan, {"A": result}, tmp_path)
     assert not (tmp_path / "annotated_zmip.h5ad").exists()
+
+
+def test_apply_output_survives_h5ad_round_trip_validation(tmp_path):
+    """Kept and reassigned clusters give msp_ann_coarse and zmip_reassigned_to different
+    category sets on disk; validation must compare them as text, not as categoricals."""
+    from zmip.annotate import _apply
+
+    ad = AnnData(np.ones((4, 2), dtype="float32"),
+                 obs=pd.DataFrame({"cl": pd.Categorical(["0", "0", "1", "1"])}, index=["c1", "c2", "c3", "c4"]))
+    proposal = {"clusters": [
+        dict(cluster_id="0", coarse_label="A", fine_label="A fine", merge_target=None, action="keep"),
+        dict(cluster_id="1", coarse_label="B", fine_label="B fine", merge_target=None, action="reassign",
+             reassign_to="B"),
+    ]}
+    removed, reassigned = _apply(ad, "cl", proposal, np.array([False, True, False, False]), "L")
+    kept = ad[(ad.obs["msp_ann_action"] == "keep").values].copy()
+    kept.write_h5ad(tmp_path / "annotated.h5ad")
+    removed.to_csv(tmp_path / "annotation_removed.csv", index=False)
+    reassigned.to_csv(tmp_path / "annotation_reassigned.csv", index=False)
+    result = load_result(tmp_path)
+    survivors = sc.read_h5ad(tmp_path / "annotated.h5ad").obs
+    assert survivors["msp_ann_coarse"].dtype == "category" and survivors["zmip_reassigned_to"].dtype == "category"
+    assert set(survivors["msp_ann_coarse"].cat.categories) != set(survivors["zmip_reassigned_to"].cat.categories)
+    labels = {"A": "L", "B": "M"}
+    merge._validate_partition("L", ad.obs_names, survivors, result["removed"], result["reassigned"])
+    merge._validate_annotation("L", survivors, result["reassigned"], ["A"], labels)
+    assert result["removed"]["cell"].tolist() == ["c2"] and result["reassigned"]["cell"].tolist() == ["c3", "c4"]
+    result["reassigned"].loc[0, "reassign_to"] = "C"
+    with pytest.raises(ValueError, match="inconsistent annotation decisions"):
+        merge._validate_annotation("L", survivors, result["reassigned"], ["A"], labels)
 
 
 def test_merge_accepts_original_audit_cluster_in_merged_component(merge_case, tmp_path):
@@ -303,6 +335,7 @@ def test_no_zoom_cli_skips_markers_and_preserves_output_contract(merge_case, tmp
     monkeypatch.setattr(sys, "argv", ["zmip", str(input_path), "--outdir", str(outdir)])
     runpy.run_module("zmip", run_name="__main__")
     output = sc.read_h5ad(outdir / "annotated_zmip.h5ad")
+    assert "_zmip_lineage" not in output.obs
     assert output.obs_names.tolist() == original.obs_names.tolist()
     assert output.obs.zmip_ann_coarse.tolist() == original.obs.msp_ann_coarse.tolist()
     assert output.obs.zmip_ann_fine.tolist() == original.obs.msp_ann_fine.tolist()
