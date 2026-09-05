@@ -114,6 +114,7 @@ ZMIP follows [OSP](https://github.com/chansigit/osp) for sample-level review
 and [MSP](https://github.com/chansigit/msp) for integration within the
 [ECA-RSI](https://github.com/chansigit/eca-rsi) workflow.
 See [inputs and outputs](docs/input-output.md) for data conventions,
+[module structure diagram](docs/architecture.html) for the code layout,
 [runtime options](docs/runtime.md) for installation and configuration,
 and [GitHub issues](https://github.com/chansigit/zmip/issues) for questions
 or problems. ZMIP uses the [MIT license](LICENSE).

@@ -1,0 +1,377 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ZMIP 项目结构：模块、数据流与阶段",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "main-path",
+        "label": "主流程",
+        "focus": [
+          "input",
+          "main",
+          "plan",
+          "lineage",
+          "annotate",
+          "merge",
+          "publication",
+          "outputs"
+        ],
+        "note": "输入 H5AD 经规划、逐谱系放大、注释、折回与原子发布，得到精修后的 H5AD 与报告。"
+      },
+      {
+        "id": "agents",
+        "label": "两次 agent 调用",
+        "focus": [
+          "plan",
+          "annotate",
+          "harness"
+        ],
+        "note": "规划与簇级注释都经 harness_bridge 调用模型，宿主端校验每次提交。"
+      },
+      {
+        "id": "guards",
+        "label": "守卫与依赖",
+        "focus": [
+          "cache",
+          "foreign",
+          "msp",
+          "report",
+          "publication"
+        ],
+        "note": "收据与锁保证可恢复的 resume；MSP 提供重嵌入与报告机制。"
+      }
+    ],
+    "viewBox": [
+      1130,
+      560
+    ]
+  },
+  "components": [
+    {
+      "id": "input",
+      "type": "external",
+      "label": "annotated.h5ad",
+      "sublabel": "MSP 注释结果",
+      "pos": [
+        40,
+        80
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "main",
+      "type": "backend",
+      "label": "zmip.__main__",
+      "sublabel": "阶段编排",
+      "pos": [
+        265,
+        80
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "plan",
+      "type": "backend",
+      "label": "zmip.plan",
+      "sublabel": "谱系规划 · 岛校验",
+      "pos": [
+        490,
+        80
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "tag": "agent"
+    },
+    {
+      "id": "lineage",
+      "type": "backend",
+      "label": "zmip.lineage",
+      "sublabel": "逐谱系子进程池",
+      "pos": [
+        940,
+        80
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "annotate",
+      "type": "backend",
+      "label": "zmip.annotate",
+      "sublabel": "簇级 keep/remove/reassign",
+      "pos": [
+        715,
+        440
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "tag": "agent"
+    },
+    {
+      "id": "merge",
+      "type": "backend",
+      "label": "zmip.merge",
+      "sublabel": "折回全局 · 覆盖校验",
+      "pos": [
+        490,
+        440
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "publication",
+      "type": "security",
+      "label": "zmip.publication",
+      "sublabel": "journal + 备份回滚",
+      "pos": [
+        265,
+        440
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "outputs",
+      "type": "database",
+      "label": "annotated_zmip.h5ad",
+      "sublabel": "report.html · 审计 CSV",
+      "pos": [
+        40,
+        440
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "cache",
+      "type": "security",
+      "label": "zmip.cache / runtime",
+      "sublabel": "resume 收据 · 锁 · 运行时身份",
+      "pos": [
+        40,
+        260
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "foreign",
+      "type": "backend",
+      "label": "zmip.foreign",
+      "sublabel": "谱系 marker · 外来分数",
+      "pos": [
+        715,
+        80
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "msp",
+      "type": "external",
+      "label": "msp",
+      "sublabel": "integrate_adata · plots · report",
+      "pos": [
+        940,
+        260
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "harness",
+      "type": "external",
+      "label": "harness_bridge",
+      "sublabel": "Doubao / DeepSeek / Claude",
+      "pos": [
+        602,
+        260
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "report",
+      "type": "backend",
+      "label": "zmip.report",
+      "sublabel": "全局 HTML 报告",
+      "pos": [
+        265,
+        260
+      ],
+      "size": [
+        150,
+        64
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "read-input",
+      "from": "input",
+      "to": "main",
+      "label": "读取",
+      "variant": "emphasis",
+      "labelDy": -34
+    },
+    {
+      "id": "receipts",
+      "from": "main",
+      "to": "cache",
+      "label": "prepare_run · lock_run"
+    },
+    {
+      "id": "plan-call",
+      "from": "main",
+      "to": "plan",
+      "label": "plan_lineages",
+      "variant": "emphasis",
+      "labelDy": -34
+    },
+    {
+      "id": "plan-agent",
+      "from": "plan",
+      "to": "harness",
+      "label": "submit_plan",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "markers",
+      "from": "plan",
+      "to": "foreign",
+      "label": "按谱系分组算 marker",
+      "variant": "emphasis",
+      "labelDy": -34
+    },
+    {
+      "id": "score",
+      "from": "foreign",
+      "to": "lineage",
+      "label": "计划 + marker 表",
+      "variant": "emphasis",
+      "labelDy": -34
+    },
+    {
+      "id": "reembed",
+      "from": "msp",
+      "to": "lineage",
+      "label": "integrate_adata 重嵌入"
+    },
+    {
+      "id": "subset",
+      "from": "lineage",
+      "to": "annotate",
+      "label": "子集 + 外来分数",
+      "variant": "emphasis",
+      "labelDy": -30
+    },
+    {
+      "id": "annotate-agent",
+      "from": "annotate",
+      "to": "harness",
+      "label": "finalize_annotation",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "lineage-result",
+      "from": "annotate",
+      "to": "merge",
+      "label": "annotated.h5ad + 审计 CSV",
+      "variant": "emphasis",
+      "labelDy": 52
+    },
+    {
+      "id": "report-call",
+      "from": "merge",
+      "to": "report",
+      "label": "generate_report"
+    },
+    {
+      "id": "report-file",
+      "from": "report",
+      "to": "publication",
+      "label": "report.html",
+      "labelDy": 24
+    },
+    {
+      "id": "staging",
+      "from": "merge",
+      "to": "publication",
+      "label": "staging 集",
+      "variant": "emphasis",
+      "labelDy": 34
+    },
+    {
+      "id": "publish",
+      "from": "publication",
+      "to": "outputs",
+      "label": "原子替换",
+      "variant": "emphasis",
+      "labelDy": 34
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "四个阶段",
+      "items": [
+        "plan：agent 按 UMAP 岛把 coarse label 分组成谱系",
+        "zoom：每个谱系独立重嵌入、打外来分数、逐簇注释",
+        "merge：折回全局对象并做覆盖与一致性校验",
+        "publish：staging 后按 journal 原子发布"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "宿主守卫",
+      "items": [
+        "每个 coarse label 恰好归入一个谱系，跨岛合并被拒绝",
+        "survivors + removed 必须恰好划分谱系输入",
+        "审计 CSV 与 H5AD 的 reassign 决策逐格比对"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "可恢复 resume",
+      "items": [
+        "收据记录输入哈希、选项、依赖源码哈希",
+        "agent 设置只记录不比较，可换 max-turns 续跑",
+        "一次只允许一个父进程写输出目录"
+      ]
+    }
+  ]
+}
