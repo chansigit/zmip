@@ -32,6 +32,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 
 import numpy as np
 import pandas as pd
@@ -169,12 +170,29 @@ _CLUSTER_SCHEMA_DOC = """{
 }"""
 
 
+def _batch_annotation_removal(entry):
+    """Identify explicit batch-artifact decisions, including an 'other' alias."""
+    if entry.get("action") != "remove":
+        return False
+    reason = entry.get("remove_reason")
+    if reason == "batch":
+        return True
+    if reason != "other":
+        return False
+    return any(
+        re.search(
+            r"\b(?:batch|sample)[\s_-]+art[ie]facts?\b|(?:批次|样本)伪影", str(entry.get(field, "")), re.IGNORECASE
+        )
+        for field in ("fine_label", "rationale")
+    )
+
+
 def _guard_batch_action(entry):
     """Preserve batch-only removal requests as reviewable, non-destructive decisions."""
-    if entry.get("action") == "remove" and entry.get("remove_reason") == "batch":
+    if _batch_annotation_removal(entry):
         entry.update(
             requested_action="remove",
-            requested_remove_reason="batch",
+            requested_remove_reason=entry.get("remove_reason"),
             action="keep",
             remove_reason=None,
             host_adjustment={
@@ -320,7 +338,7 @@ def _validate_final(entries, clusters):
 def _apply(ad, key, proposal, pre_removed, lineage):
     """msp_ann_* columns on the subset (so msp's plotting/report code renders
     this round), plus the removal / reassignment archives."""
-    if any(e.get("action") == "remove" and e.get("remove_reason") == "batch" for e in proposal["clusters"]):
+    if any(_batch_annotation_removal(e) for e in proposal["clusters"]):
         raise ValueError(
             "Unreviewed batch-only removal proposal; resubmit through the guarded annotation host in a new directory"
         )
@@ -395,6 +413,9 @@ real substate (specific positive markers) vs resolution splinter (only depth/QC/
 keep / remove (independently supported doublet, low-quality, ambient, stress) / reassign.
 Sample/batch enrichment alone is not evidence of invalid cells: keep it for review. The host
 converts batch-only removal requests to keep, preserving the original request and review flag.
+Using remove_reason=other with an explicit batch/sample artifact label or rationale does not bypass
+this safeguard. Independently supported doublet, low-quality, ambient or stress removals keep their
+corresponding specific reason; do not infer invalid cells from sample composition alone.
 4. Merge — same population as another current cluster → merge_target. Merge is explicit: equal fine labels \
 must be merged (or made distinct); a merged group shares one coarse + one fine label and one action.
 If a cluster is heterogeneous, split it with subcluster (ids like "5,0"); tools and submissions then use \

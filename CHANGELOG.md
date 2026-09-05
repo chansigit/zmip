@@ -4,6 +4,15 @@ All notable changes to zmip. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 0.3.3 - 2026-09-05
+
+### Fixed
+- Preserve explicit batch/sample artifact decisions as keep for review even when
+  submitted with remove_reason=other. Retain the original reason in the host
+  audit and reject unsafe saved proposals before applying cell deletions.
+- Keep specific independently supported QC removal categories unchanged. Require
+  MSP >=0.3.3,<0.4 for the matching annotation safeguard.
+
 ## 0.3.2 - 2026-09-05
 
 ### Fixed
