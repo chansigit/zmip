@@ -1,9 +1,19 @@
 # Follow-up work
 
-- Run full-size 19Liu inspect/annotation followed by ZMIP, checking report sections,
-  cell conservation and removal reasons. A successful small run does not validate
-  full-dataset performance or biological accuracy; record the actual run evidence.
-- The minimum MSP dependency is already `>=0.3.2,<0.4`. Application modules
+- Full-size 19Liu engineering acceptance completed (2026-09-05): 81,079 source
+  cells went through MSP inspect/annotation and six ZMIP lineages. ZMIP retained
+  75,394 cells, removed 1,985 and reassigned 2,656; expression/counts, cell and
+  gene order, ledgers and report contents were checked. Reassignment updates
+  global labels; transferred cells were not re-embedded in the target lineage.
+  The final report, parallel-DE and bounded-status patches have separate
+  validation; the full chain was not rerun with all three final files.
+  Remaining work: independent biological review of labels and uncertain
+  removal decisions, including Myeloid cluster 23, Mural cluster 8 and Stromal
+  cluster 45. Sample-condition confounding and mixed marker expression do not
+  independently establish technical invalidity; the audit neither validates
+  every removal nor concludes these uncertain cells were necessarily removed
+  incorrectly.
+- The minimum MSP dependency is already `>=0.3.3,<0.4`. Application modules
   use public names; the seven private fallbacks remain confined to
   `zmip/msp_compat.py`. Remove those fallbacks in the next maintenance change,
   without changing the already validated release package for this cleanup.
