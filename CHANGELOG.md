@@ -4,7 +4,7 @@ All notable changes to zmip. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.3.4 - 2026-09-07
 
 ### Added
 - `--design-context TEXT`, mirroring MSP: persisted as `design_context.txt` and
