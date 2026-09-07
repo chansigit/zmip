@@ -56,7 +56,7 @@ from msp.evidence import (
     parse_reference,
     stability_table,
 )
-from msp.report import generate_report
+from msp.report import design_block, generate_report
 
 from .msp_compat import components, plot_annotation, prior_label_columns, subcluster_once
 
@@ -396,7 +396,7 @@ msp_ann_fine_prev (previous round, to be improved, not copied). Task: annotate E
 clustering {BASE_KEY} ({len(clusters)} clusters: {clusters}) — refine fine labels, remove noise, hand \
 misassigned cells to their real lineage — and submit one JSON per cluster.
 {context}
-Other lineages' coarse labels (the only valid reassign_to targets): {sorted(other_labels)}.
+{design_block(outdir)}Other lineages' coarse labels (the only valid reassign_to targets): {sorted(other_labels)}.
 Foreign-lineage scores available on every cell (obs foreign_<lineage>, sc.tl.score_genes on that \
 lineage's top markers computed on the whole dataset): {foreign}. They are EVIDENCE, not verdicts: \
 lineages can be transcriptionally close, so a high foreign score is compatible with a doublet (also high \

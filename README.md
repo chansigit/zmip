@@ -74,6 +74,11 @@ export ARK_API_KEY="YOUR_ARK_API_KEY"
 HARNESS=openai python -m zmip msp_out/annotated.h5ad --outdir zmip_out
 ```
 
+Pass `--design-context TEXT` (same text as MSP's) when sample identity encodes the
+study design, e.g. one FACS plate = one mouse x one sort gate; every lineage's
+annotation agent sees it verbatim, so a sample-confined cluster is judged
+against the design rather than as a batch artefact. Kept in `zmip_out/design_context.txt`.
+
 ## Read your results
 
 After a successful run, open `zmip_out/report.html` in your browser. Check

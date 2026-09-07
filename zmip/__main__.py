@@ -28,7 +28,7 @@ import sys
 import pandas as pd
 import scanpy as sc
 from harness_bridge import configure_logging, resolve_agent_config
-from msp.report import write_report_context
+from msp.report import write_design_context, write_report_context
 
 from . import cache, publication
 from .runtime import check_runtime
@@ -74,6 +74,13 @@ parser.add_argument(
     metavar="TEXT",
     help='where this run sits, for report titles (e.g. "round 2 · fu2022-meniscus")',
 )
+parser.add_argument(
+    "--design-context",
+    default=None,
+    metavar="TEXT",
+    help="how the samples were produced (e.g. one plate = one mouse x one FACS gate); shown verbatim to "
+    "every lineage's annotation agent and persisted in <outdir>/design_context.txt",
+)
 parser.add_argument("--force", action="store_true")
 args = parser.parse_args()
 configure_logging("zmip", "msp")
@@ -94,7 +101,7 @@ with cache.lock_run(out):
     # but do not invalidate finished stages (raising --max-turns must not force a full rerun).
     agent_keys = {"model", "effort", "max_turns", "language"}
     options = {
-        k: v for k, v in vars(args).items() if k not in {"h5ad", "outdir", "force", "report_context"} | agent_keys
+        k: v for k, v in vars(args).items() if k not in {"h5ad", "outdir", "force", "report_context", "design_context"} | agent_keys
     }
     agent = {k: getattr(args, k) for k in sorted(agent_keys)}
     agent["harness"] = agent_config.harness
@@ -105,6 +112,7 @@ with cache.lock_run(out):
     }
     generation = cache.prepare_run(out, args.h5ad, options, force=args.force, agent=agent)
     write_report_context(out, args.report_context)
+    write_design_context(out, args.design_context)
     ad = sc.read_h5ad(args.h5ad)
     if not ad.obs_names.is_unique:
         sys.exit("input cell identifiers must be unique")

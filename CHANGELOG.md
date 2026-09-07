@@ -4,6 +4,13 @@ All notable changes to zmip. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+- `--design-context TEXT`, mirroring MSP: persisted as `design_context.txt` and
+  injected verbatim into every lineage's annotation prompt. Agent context only:
+  it is not part of the run identity, so changing it does not force a rerun.
+
 ## 0.3.3 - 2026-09-05
 
 ### Added
