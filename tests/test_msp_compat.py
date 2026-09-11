@@ -1,35 +1,16 @@
-"""Both published MSP 0.3.0 and its public-wrapper upgrade remain usable."""
-
-from types import SimpleNamespace
-
-import pytest
+"""msp_compat is a plain re-export of msp's public evidence/report API."""
 
 from zmip import msp_compat
 
 
-@pytest.mark.parametrize("public_available", [False, True])
-def test_resolve_prefers_public_api_and_only_falls_back_when_missing(monkeypatch, public_available):
-    public, legacy = object(), object()
-    modules = {
-        "public": SimpleNamespace(api=public) if public_available else SimpleNamespace(),
-        "legacy": SimpleNamespace(_api=legacy),
+def test_reexports_every_helper_from_its_public_msp_module():
+    from msp import evidence, report
+
+    for name in ("components", "palette", "plot_annotation", "prior_label_columns", "subcluster_once"):
+        assert getattr(msp_compat, name) is getattr(evidence, name)
+    for name in ("csv_table", "img"):
+        assert getattr(msp_compat, name) is getattr(report, name)
+    assert set(msp_compat.__all__) == {
+        "components", "csv_table", "img", "palette", "plot_annotation",
+        "prior_label_columns", "subcluster_once",
     }
-    requested = []
-
-    def import_module(name):
-        requested.append(name)
-        return modules[name]
-
-    monkeypatch.setattr(msp_compat.importlib, "import_module", import_module)
-    result = msp_compat._resolve("public", "api", "legacy", "_api")
-    assert result is (public if public_available else legacy)
-    assert requested == (["public"] if public_available else ["public", "legacy"])
-
-
-def test_resolve_does_not_hide_broken_public_module(monkeypatch):
-    def broken_import(name):
-        raise ImportError("broken dependency")
-
-    monkeypatch.setattr(msp_compat.importlib, "import_module", broken_import)
-    with pytest.raises(ImportError, match="broken dependency"):
-        msp_compat._resolve("public", "api", "legacy", "_api")

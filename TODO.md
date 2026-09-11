@@ -13,14 +13,11 @@
   independently establish technical invalidity; the audit neither validates
   every removal nor concludes these uncertain cells were necessarily removed
   incorrectly.
-- The minimum MSP dependency is already `>=0.3.3,<0.4`. Application modules
-  use public names; the seven private fallbacks remain confined to
-  `zmip/msp_compat.py`. Remove those fallbacks in the next maintenance change,
-  without changing the already validated release package for this cleanup.
-  Acceptance: all seven helpers resolve through MSP's public API with the
-  minimum supported MSP version, compatibility tests and the full suite pass,
-  and a built wheel imports outside the checkout. Keep `<0.4` until that
-  release is tested.
+- ~~Remove the seven private fallbacks in `zmip/msp_compat.py`~~ — done in
+  0.3.7 (2026-09-11): minimum MSP dependency moved to `>=0.4.0,<0.5` (msp
+  removed the deprecated `msp.harness` shim in 0.4), and `msp_compat.py` is
+  now a plain re-export of `msp.evidence`/`msp.report`. Full suite passes;
+  a built wheel imports `zmip.msp_compat` cleanly outside the checkout.
 - At the next explicit runtime-identity schema migration, remove the legacy
   `torch` version field. Schema 1 retains it to avoid silently changing resume
   identity comparison. Torch is not a computation dependency. Acceptance:

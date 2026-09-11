@@ -4,6 +4,13 @@ All notable changes to zmip. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 0.3.7 - 2026-09-11
+
+- `msp_compat.py` is now a plain re-export of `msp.evidence`/`msp.report`
+  instead of a runtime public-vs-private fallback resolver: the minimum MSP
+  dependency (0.4.0) has had the public API since 0.3.1, so the fallback
+  branch was always dead code.
+
 ## 0.3.6 - 2026-09-11
 
 - Widen the `msp-sc` dependency to `>=0.4.0,<0.5` (msp 0.4 removed the
