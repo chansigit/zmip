@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zmip"
-version = "0.3.4"
+version = "0.3.5"
 description = "Zoom-in pipeline: per-lineage re-embedding, foreign-lineage scoring and agent refinement of an msp annotation"
 readme = "README.md"
 license = "MIT"

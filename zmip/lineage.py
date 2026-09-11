@@ -21,6 +21,18 @@ be passed in from the job script:
 Each child gets OMP/BLAS/numba/MSP_MAX_THREADS = cpus // n_parallel so the
 pool doesn't oversubscribe the allocation. Child stdout is streamed into the
 parent's log line by line with a "[lineage]" prefix.
+
+Each lineage subprocess resolves AGENT_MODEL_POOL fresh in its own process
+(agent-harness-bridge's ModelPool keeps no state outside the process that
+built it) -- so without help, every lineage tries the pool's primary
+candidate first, and several lineages running at once collapse onto one
+endpoint exactly when a pool of alternatives was meant to give an escape
+hatch from that. AGENT_MODEL_POOL_ROTATE=1 hands the Nth lineage launched a
+copy of the pool rotated by N (agent_harness_bridge.rotate_model_pool),
+spreading first attempts across an equally-trusted pool while each lineage
+keeps its own full fallback depth. Off by default: without it every worker
+prefers the same primary, which is the right default for a quality-ranked
+fallback list rather than equally-trusted alternatives.
 """
 
 from __future__ import annotations
@@ -39,7 +51,7 @@ import time
 
 import pandas as pd
 import scanpy as sc
-from harness_bridge import configure_logging
+from harness_bridge import configure_logging, rotate_model_pool
 from msp.integrate import integrate_adata
 from msp.plots import save_single_umap
 from msp.resources import available_cpus, available_memory_bytes, current_rss_bytes
@@ -296,6 +308,9 @@ def run_lineages_parallel(ad, todo, all_labels, outdir, child_args, *, coarse_co
     env = dict(os.environ)
     for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS", "MSP_MAX_THREADS"):
         env[k] = str(threads)
+    pool_spec = env.get("AGENT_MODEL_POOL", "")
+    rotate = bool(pool_spec) and env.get("AGENT_MODEL_POOL_ROTATE", "").strip() not in ("", "0")
+    launched = 0
 
     pending = list(todo)
     running = {}  # name -> (proc, est_bytes, t0, log_thread)
@@ -334,12 +349,16 @@ def run_lineages_parallel(ad, todo, all_labels, outdir, child_args, *, coarse_co
                 subset_path = os.path.join(d, SUBSET_FILE)
                 subset_for(ad, ln["coarse_labels"], coarse_col, fine_col).write_h5ad(subset_path)
                 cmd = [sys.executable, "-m", "zmip.lineage", outdir, name, "--subset", subset_path, *child_args]
+                child_env = env
+                if rotate:
+                    child_env = {**env, "AGENT_MODEL_POOL": rotate_model_pool(pool_spec, launched)}
+                launched += 1
                 proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
-                    env=env,
+                    env=child_env,
                     bufsize=1,
                     start_new_session=True,
                 )

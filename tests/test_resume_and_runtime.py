@@ -195,6 +195,54 @@ def test_pool_cleans_launched_process_on_parent_failure(tmp_path, monkeypatch, f
             proc.wait()
 
 
+def test_agent_model_pool_rotates_per_launched_lineage_when_opted_in(tmp_path, monkeypatch):
+    # zmip's own per-lineage fan-out is exactly where ModelPool's fresh-per-process
+    # state (agent-harness-bridge#... / eca-rsi#7) would otherwise mean every
+    # concurrent lineage hits the pool's primary candidate first.
+    real_popen, real_sleep = subprocess.Popen, time.sleep
+    seen_pools = []
+
+    def spawn(cmd, **kwargs):
+        seen_pools.append(kwargs["env"].get("AGENT_MODEL_POOL"))
+        proc = real_popen([sys.executable, "-c", "raise SystemExit(0)"], **kwargs)
+        return proc
+
+    monkeypatch.setattr(lineage.subprocess, "Popen", spawn)
+    monkeypatch.setattr(lineage.time, "sleep", lambda _: real_sleep(0.01))
+    monkeypatch.setattr(lineage, "subset_for", lambda *a: SimpleNamespace(write_h5ad=lambda p: None))
+    monkeypatch.setattr(lineage, "plan_concurrency", lambda _: (3, 10**12, 1))
+    monkeypatch.setattr(lineage, "contract_done", lambda _: True)
+    monkeypatch.setattr(lineage, "load_result", lambda d: {"dir": d})
+    monkeypatch.setenv("AGENT_MODEL_POOL", "openai:m1,claude:m2")
+    monkeypatch.setenv("AGENT_MODEL_POOL_ROTATE", "1")
+    # sorted biggest-first -> launch order C, B, A
+    todo = [{"name": n, "coarse_labels": [n], "n_cells": c} for n, c in [("A", 10), ("B", 20), ("C", 30)]]
+    assert set(lineage.run_lineages_parallel(
+        None, todo, {"A", "B", "C"}, str(tmp_path), [], coarse_col="coarse", fine_col="fine"
+    )) == {"A", "B", "C"}
+    assert seen_pools == ["openai:m1,claude:m2", "claude:m2,openai:m1", "openai:m1,claude:m2"]
+
+
+def test_agent_model_pool_is_not_rotated_by_default(tmp_path, monkeypatch):
+    real_popen, real_sleep = subprocess.Popen, time.sleep
+    seen_pools = []
+
+    def spawn(cmd, **kwargs):
+        seen_pools.append(kwargs["env"].get("AGENT_MODEL_POOL"))
+        return real_popen([sys.executable, "-c", "raise SystemExit(0)"], **kwargs)
+
+    monkeypatch.setattr(lineage.subprocess, "Popen", spawn)
+    monkeypatch.setattr(lineage.time, "sleep", lambda _: real_sleep(0.01))
+    monkeypatch.setattr(lineage, "subset_for", lambda *a: SimpleNamespace(write_h5ad=lambda p: None))
+    monkeypatch.setattr(lineage, "plan_concurrency", lambda _: (2, 10**12, 1))
+    monkeypatch.setattr(lineage, "contract_done", lambda _: True)
+    monkeypatch.setattr(lineage, "load_result", lambda d: {"dir": d})
+    monkeypatch.setenv("AGENT_MODEL_POOL", "openai:m1,claude:m2")
+    todo = [{"name": n, "coarse_labels": [n], "n_cells": 10} for n in ("A", "B")]
+    lineage.run_lineages_parallel(None, todo, {"A", "B"}, str(tmp_path), [], coarse_col="coarse", fine_col="fine")
+    assert seen_pools == ["openai:m1,claude:m2", "openai:m1,claude:m2"]
+
+
 @pytest.mark.parametrize("first_exit", [0, 1])
 def test_pool_reaps_logs_and_allows_independent_lineage_to_finish(tmp_path, monkeypatch, caplog, first_exit):
     real_popen, real_sleep = subprocess.Popen, time.sleep
