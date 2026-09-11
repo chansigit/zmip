@@ -4,6 +4,17 @@ All notable changes to zmip. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 0.3.6 - 2026-09-11
+
+- Widen the `msp-sc` dependency to `>=0.4.0,<0.5` (msp 0.4 removed the
+  deprecated `msp.harness` shim; zmip never imported it).
+
+## 0.3.5 - 2026-09-11
+
+- `AGENT_MODEL_POOL_ROTATE` spreads concurrent per-lineage workers across the
+  pool instead of every worker preferring the same primary candidate
+  (eca-rsi#7).
+
 ## 0.3.4 - 2026-09-07
 
 ### Added
