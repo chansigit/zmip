@@ -78,6 +78,7 @@ def test_plan_force_recomputes_and_resume_revalidates(tmp_path, monkeypatch):
     candidate = {
         "lineages": [{"name": label, "coarse_labels": [label], "zoom": True} for label in counts.index],
         "confirm_shared_islands": True,
+        "shared_island_reviews": {"island_1": "A and B retain separate marker programs despite a shared island"},
     }
     calls = []
 
@@ -457,33 +458,18 @@ def test_cli_resume_reruns_only_damaged_lineage_and_force_replans(tmp_path, monk
     np.testing.assert_array_equal(result.layers["counts"], ad.layers["counts"])
 
 
-def test_shared_island_with_weak_knn_separation_is_hard_not_confirmable():
-    # Same setup as test_plan_force_recomputes_and_resume_revalidates (A, B
-    # share one island) but now the kNN table says they barely separate --
-    # confirm_shared_islands must not be able to buy that off (the
-    # 04_Sunetal Stromal/Mesenchymal-stromal bug: distinct lineages, one
-    # population).
+def test_shared_island_requires_written_review_at_any_edge_share():
     counts = pd.DataFrame({"n_cells": [1000, 1000]}, index=["A", "B"])
-    shared = pd.DataFrame({"island_1": [100.0, 100.0]}, index=["A", "B"])
-    knn = pd.DataFrame({"A": [90.0, 15.0], "B": [10.0, 85.0]}, index=["A", "B"])
-    candidate = {
-        "lineages": [{"name": label, "coarse_labels": [label], "zoom": True} for label in counts.index],
-        "confirm_shared_islands": True,
-    }
-    problems, norm = plan_module.validate_plan(candidate, list(counts.index), counts, 800, shared, knn)
-    assert norm is None
-    assert any("no real separation" in p for p in problems)
-
-
-def test_shared_island_with_strong_knn_separation_still_needs_confirmation():
-    counts = pd.DataFrame({"n_cells": [1000, 1000]}, index=["A", "B"])
-    shared = pd.DataFrame({"island_1": [100.0, 100.0]}, index=["A", "B"])
-    knn = pd.DataFrame({"A": [99.0, 2.0], "B": [1.0, 98.0]}, index=["A", "B"])
-    candidate = {
-        "lineages": [{"name": label, "coarse_labels": [label], "zoom": True} for label in counts.index],
-    }
-    problems, norm = plan_module.validate_plan(candidate, list(counts.index), counts, 800, shared, knn)
-    assert norm is None and any("confirm_shared_islands" in p for p in problems)
-    candidate["confirm_shared_islands"] = True
-    problems, norm = plan_module.validate_plan(candidate, list(counts.index), counts, 800, shared, knn)
-    assert not problems and norm is not None
+    islands = pd.DataFrame({"island_1": [100.0, 100.0]}, index=["A", "B"])
+    candidate = {"lineages": [{"name": x, "coarse_labels": [x]} for x in counts.index],
+                 "confirm_shared_islands": True}
+    for mix in (2.0, 8.5, 15.0):
+        knn = pd.DataFrame([[100-mix, mix], [mix, 100-mix]], index=counts.index, columns=counts.index)
+        problems, result = plan_module.validate_plan(candidate, list(counts.index), counts, 800, islands, knn)
+        assert result is None and any("shared_island_reviews" in p for p in problems)
+        reviewed = {**candidate, "shared_island_reviews": {"island_1": "Distinct marker programs; graph separation uncertain"}}
+        problems, result = plan_module.validate_plan(reviewed, list(counts.index), counts, 800, islands, knn)
+        assert not problems and result["shared_island_reviews"] == reviewed["shared_island_reviews"]
+        assert result["host_warnings"]
+        reviewed["shared_island_reviews"]["island_1"] = ""
+        assert plan_module.validate_plan(reviewed, list(counts.index), counts, 800, islands, knn)[0]

@@ -24,8 +24,8 @@ that, leiden cannot resolve stable substates — default 800); a lineage may
 not pool labels whose cells sit on different UMAP islands (the rule the
 prompt states, checked against lineage_islands.csv — a weak model once
 pooled every label into one lineage); labels sharing one island but split
-across lineages are pushed back once for confirmation (confirm_shared_islands:
-true) since a touching-but-distinct pair is a judgement the picture decides.
+across lineages require confirmation and a written shared_island_reviews
+explanation. Mixing alone is not proof of identical biological identity.
 The plan is archived to zmip_plan.json and reused on resume.
 """
 
@@ -125,18 +125,27 @@ def home_islands(islands, label):
     return {c for c in islands.columns if c != "noise" and row[c] >= 100 * HOME_FRAC}
 
 
+def _shared_islands(lineages, islands):
+    if islands is None:
+        return {}
+    by_label = {label: ln["name"] for ln in lineages for label in ln["coarse_labels"]}
+    shared = {}
+    for island in (c for c in islands.columns if c != "noise"):
+        owners = {}
+        for label in islands.index:
+            if island in home_islands(islands, label) and label in by_label:
+                owners.setdefault(by_label[label], []).append(label)
+        if len(owners) > 1:
+            shared[island] = owners
+    return shared
+
+
 def island_problems(lineages, islands, knn=None):
-    """(hard, soft): hard = a lineage pools labels whose home islands are
-    disjoint (separate islands on the UMAP), OR two labels share one island
-    AND (with knn given) have no real separation between them -- confirming
-    the split cannot override that, same population under two lineage names
-    (the 04_Sunetal Stromal/Mesenchymal-stromal bug: an agent confirmed a
-    shared-island split on the picture alone with nothing backing it once you
-    checked the graph). soft = labels with a common home island split across
-    lineages that DO show real separation -- still needs confirm_shared_islands
-    since only the picture decides that one. A label with no home island
-    (scattered or all noise) constrains nothing; a label spanning several
-    islands links them."""
+    """Disconnected pooling is invalid; shared-island splits require review.
+
+    Edge shares describe graph mixing, not biological identity. Include them
+    as evidence without treating any fixed percentage as proof of sameness.
+    """
     hard, soft = [], []
     if islands is None:
         return hard, soft
@@ -168,43 +177,18 @@ def island_problems(lineages, islands, knn=None):
                 f"lineage {ln['name']!r} pools labels that sit on separate UMAP islands: {parts} "
                 f"(see lineage_islands.csv) — separate islands must be separate lineages"
             )
-    by_label = {m: ln["name"] for ln in lineages for m in ln["coarse_labels"]}
-    # No local marker between labels on Sherlock scRNA data has ever meant a
-    # real split at reasonable kNN resolution; this mirrors msp.annotate's
-    # |log2FC|>=1 bar, just in cross-connectivity terms since lineage-level
-    # evidence here is the kNN table, not per-cluster DEG.
-    _WEAK_SEPARATION_MAX_PCT = 10.0
-    for isl in [c for c in islands.columns if c != "noise"]:
-        owners = {}
-        for m in islands.index:
-            if isl in home_islands(islands, m) and m in by_label:
-                owners.setdefault(by_label[m], []).append(m)
-        if len(owners) <= 1:
-            continue
-        size = islands.attrs.get("island_sizes", {}).get(isl, "?")
-        weak_pairs = []
+    for island, owners in _shared_islands(lineages, islands).items():
+        size = islands.attrs.get("island_sizes", {}).get(island, "?")
+        evidence = []
         if knn is not None:
-            members = [m for ms in owners.values() for m in ms]
-            for i, a in enumerate(members):
-                for b in members[i + 1 :]:
-                    if by_label[a] == by_label[b] or a not in knn.index or b not in knn.columns:
-                        continue
-                    mix = max(float(knn.loc[a, b]), float(knn.loc[b, a]))
-                    if mix >= _WEAK_SEPARATION_MAX_PCT:
-                        weak_pairs.append((a, b, mix))
-        if weak_pairs:
-            hard.append(
-                f"{isl} ({size} cells): "
-                + "; ".join(f"{a!r} <-> {b!r} share {mix:.1f}% of kNN edges" for a, b, mix in weak_pairs)
-                + f" (>= {_WEAK_SEPARATION_MAX_PCT}%) despite being split across lineages "
-                + "; ".join(f"{n!r}: {ms}" for n, ms in owners.items())
-                + " — no real separation, put them in the same lineage (confirm_shared_islands cannot override this)"
-            )
-        else:
-            soft.append(
-                f"{isl} ({size} cells) is shared by labels "
-                f"in different lineages: " + "; ".join(f"{n!r}: {ms}" for n, ms in owners.items())
-            )
+            members = [(label, owner) for owner, labels in owners.items() for label in labels]
+            for i, (a, owner) in enumerate(members):
+                for b, other in members[i + 1:]:
+                    if owner != other and a in knn.index and b in knn.index and a in knn.columns and b in knn.columns:
+                        evidence.append(f"{a!r}->{b!r} {knn.loc[a, b]:.2f}%, reverse {knn.loc[b, a]:.2f}%")
+        soft.append(f"{island} ({size} cells) is shared by labels in different lineages: "
+                    + "; ".join(f"{name!r}: {labels}" for name, labels in owners.items())
+                    + ("; kNN edge shares: " + "; ".join(evidence) if evidence else ""))
     return hard, soft
 
 
@@ -273,8 +257,8 @@ def validate_plan(plan, labels, counts, min_cells, islands=None, knn=None):
     """Host rules. Returns (problems, normalised_plan). Below-threshold
     lineages are forced to zoom=false (recorded), not rejected. With an
     islands table: pooling separate islands is rejected; splitting a shared
-    island is rejected once, accepted when the plan carries
-    confirm_shared_islands: true (recorded under host_warnings)."""
+    island needs confirm_shared_islands plus a written shared_island_reviews
+    explanation for each island. Both the evidence and uncertainty are archived."""
     problems = []
     if not isinstance(plan, dict):
         return ["plan must be a JSON object"], None
@@ -339,6 +323,16 @@ def validate_plan(plan, labels, counts, min_cells, islands=None, knn=None):
         return [str(exc)], None
     hard, soft = island_problems(out, islands, knn)
     problems += hard
+    shared = _shared_islands(out, islands)
+    reviews = plan.get("shared_island_reviews", {})
+    if not isinstance(reviews, dict):
+        return ["shared_island_reviews must be an object mapping island names to evidence explanations"], None
+    if set(reviews) - set(shared):
+        problems.append("shared_island_reviews contains unknown or stale island names")
+    for island in shared:
+        if not isinstance(reviews.get(island), str) or not reviews[island].strip():
+            problems.append(f"{island}: provide shared_island_reviews[{island!r}] explaining the split "
+                            "using expression/graph evidence and any uncertainty; a boolean confirmation is insufficient")
     if soft and not plan.get("confirm_shared_islands", False):
         problems += [
             f"{w} — labels on one island belong to one lineage unless the picture shows a real gap; "
@@ -350,6 +344,7 @@ def validate_plan(plan, labels, counts, min_cells, islands=None, knn=None):
     norm = {"lineages": out, "notes": str(plan.get("notes", "")), "min_cells": min_cells}
     if soft:
         norm["host_warnings"] = soft
+        norm["shared_island_reviews"] = reviews
     return [], norm
 
 
@@ -361,7 +356,8 @@ _PLAN_SCHEMA_DOC = """{
      "reason": "<why these labels are one island / one lineage, and why zoom or not>"}
   ],
   "notes": "<overall reading of the UMAP: which islands exist, how clean the separation is>",
-  "confirm_shared_islands": false   // only set true when resubmitting a plan the host flagged for splitting one island
+  "confirm_shared_islands": false,  // true after explicitly reviewing a shared-island split
+  "shared_island_reviews": {}       // island name -> expression/graph evidence, including uncertainty
 }"""
 
 
@@ -376,7 +372,8 @@ def _islands_text(islands):
         + "):\n"
         + islands.to_string()
         + "\nThe host rejects a lineage that pools labels sitting on different islands, "
-        "and asks once for confirmation when labels sharing an island are split across lineages.\n"
+        "and requires a written shared_island_reviews explanation when labels sharing an island are split "
+        "across lineages. Graph mixing alone does not prove identical cell types.\n"
     )
 
 

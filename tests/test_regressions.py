@@ -78,10 +78,11 @@ def test_island_defenses_and_real_false_are_preserved():
     plan = make_plan()
     assert validate(plan, shared)[0]
     plan["confirm_shared_islands"] = True
+    plan["shared_island_reviews"] = {"island_1": "Distinct marker programs support A and B."}
     problems, normalized = validate(plan, shared)
     assert not problems and normalized["host_warnings"]
     plan["lineages"][0]["zoom"] = False
-    assert validate(plan)[1]["lineages"][0]["zoom"] is False
+    assert validate(plan, shared)[1]["lineages"][0]["zoom"] is False
     separate = pd.DataFrame({"island_1": [100.0, 0.0], "island_2": [0.0, 100.0]}, index=["A", "B"])
     pooled = {"lineages": [{"name": "Both", "coarse_labels": ["A", "B"]}]}
     assert validate(pooled, separate)[0]

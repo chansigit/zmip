@@ -104,11 +104,11 @@ with cache.lock_run(out):
         k: v for k, v in vars(args).items() if k not in {"h5ad", "outdir", "force", "report_context", "design_context"} | agent_keys
     }
     agent = {k: getattr(args, k) for k in sorted(agent_keys)}
-    agent["harness"] = agent_config.harness
+    agent["harness"] = agent_config.as_manifest()["harness"]
     agent["harness_options"] = {k: os.environ.get(k) for k in ("DSH_PROVIDER", "OPENAI_AGENTS_API")}
     # Endpoint identity matters, but do not copy URLs (possibly containing credentials) into receipts.
     agent["endpoint_sha256"] = {
-        k: hashlib.sha256(os.environ.get(k, "").encode()).hexdigest() for k in ("DOUBAO_BASE_URL", "ANTHROPIC_BASE_URL")
+        k: hashlib.sha256(os.environ.get(k, "").encode()).hexdigest() for k in ("DOUBAO_BASE_URL", "ANTHROPIC_BASE_URL", "OPENROUTER_BASE_URL", "VLLM_BASE_URL")
     }
     generation = cache.prepare_run(out, args.h5ad, options, force=args.force, agent=agent)
     write_report_context(out, args.report_context)

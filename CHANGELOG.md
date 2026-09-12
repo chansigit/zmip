@@ -4,6 +4,12 @@ All notable changes to zmip. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 0.3.8 - 2026-09-12
+
+- Require a written review for each shared UMAP island split across lineages; graph mixing is evidence, not a fixed-percentage merge rule.
+- Archive reviews with the plan; preserve existing coverage, directory, disconnected-pooling and real-boolean checks.
+- Record the full agent provider and endpoint hashes; use MSP 0.5.0 and bridge 0.2.13.
+
 ## 0.3.7 - 2026-09-11
 
 - `msp_compat.py` is now a plain re-export of `msp.evidence`/`msp.report`
