@@ -455,3 +455,35 @@ def test_cli_resume_reruns_only_damaged_lineage_and_force_replans(tmp_path, monk
     assert result.obs_names.tolist() == ad.obs_names.tolist()
     assert result.obs.zmip_ann_fine.tolist() == ["new A"] * 3 + ["new B"] * 3
     np.testing.assert_array_equal(result.layers["counts"], ad.layers["counts"])
+
+
+def test_shared_island_with_weak_knn_separation_is_hard_not_confirmable():
+    # Same setup as test_plan_force_recomputes_and_resume_revalidates (A, B
+    # share one island) but now the kNN table says they barely separate --
+    # confirm_shared_islands must not be able to buy that off (the
+    # 04_Sunetal Stromal/Mesenchymal-stromal bug: distinct lineages, one
+    # population).
+    counts = pd.DataFrame({"n_cells": [1000, 1000]}, index=["A", "B"])
+    shared = pd.DataFrame({"island_1": [100.0, 100.0]}, index=["A", "B"])
+    knn = pd.DataFrame({"A": [90.0, 15.0], "B": [10.0, 85.0]}, index=["A", "B"])
+    candidate = {
+        "lineages": [{"name": label, "coarse_labels": [label], "zoom": True} for label in counts.index],
+        "confirm_shared_islands": True,
+    }
+    problems, norm = plan_module.validate_plan(candidate, list(counts.index), counts, 800, shared, knn)
+    assert norm is None
+    assert any("no real separation" in p for p in problems)
+
+
+def test_shared_island_with_strong_knn_separation_still_needs_confirmation():
+    counts = pd.DataFrame({"n_cells": [1000, 1000]}, index=["A", "B"])
+    shared = pd.DataFrame({"island_1": [100.0, 100.0]}, index=["A", "B"])
+    knn = pd.DataFrame({"A": [99.0, 2.0], "B": [1.0, 98.0]}, index=["A", "B"])
+    candidate = {
+        "lineages": [{"name": label, "coarse_labels": [label], "zoom": True} for label in counts.index],
+    }
+    problems, norm = plan_module.validate_plan(candidate, list(counts.index), counts, 800, shared, knn)
+    assert norm is None and any("confirm_shared_islands" in p for p in problems)
+    candidate["confirm_shared_islands"] = True
+    problems, norm = plan_module.validate_plan(candidate, list(counts.index), counts, 800, shared, knn)
+    assert not problems and norm is not None

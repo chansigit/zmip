@@ -125,12 +125,18 @@ def home_islands(islands, label):
     return {c for c in islands.columns if c != "noise" and row[c] >= 100 * HOME_FRAC}
 
 
-def island_problems(lineages, islands):
+def island_problems(lineages, islands, knn=None):
     """(hard, soft): hard = a lineage pools labels whose home islands are
-    disjoint (separate islands on the UMAP); soft = labels with a common home
-    island split across lineages. A label with no home island (scattered or
-    all noise) constrains nothing; a label spanning several islands links
-    them."""
+    disjoint (separate islands on the UMAP), OR two labels share one island
+    AND (with knn given) have no real separation between them -- confirming
+    the split cannot override that, same population under two lineage names
+    (the 04_Sunetal Stromal/Mesenchymal-stromal bug: an agent confirmed a
+    shared-island split on the picture alone with nothing backing it once you
+    checked the graph). soft = labels with a common home island split across
+    lineages that DO show real separation -- still needs confirm_shared_islands
+    since only the picture decides that one. A label with no home island
+    (scattered or all noise) constrains nothing; a label spanning several
+    islands links them."""
     hard, soft = [], []
     if islands is None:
         return hard, soft
@@ -163,14 +169,40 @@ def island_problems(lineages, islands):
                 f"(see lineage_islands.csv) — separate islands must be separate lineages"
             )
     by_label = {m: ln["name"] for ln in lineages for m in ln["coarse_labels"]}
+    # No local marker between labels on Sherlock scRNA data has ever meant a
+    # real split at reasonable kNN resolution; this mirrors msp.annotate's
+    # |log2FC|>=1 bar, just in cross-connectivity terms since lineage-level
+    # evidence here is the kNN table, not per-cluster DEG.
+    _WEAK_SEPARATION_MAX_PCT = 10.0
     for isl in [c for c in islands.columns if c != "noise"]:
         owners = {}
         for m in islands.index:
             if isl in home_islands(islands, m) and m in by_label:
                 owners.setdefault(by_label[m], []).append(m)
-        if len(owners) > 1:
+        if len(owners) <= 1:
+            continue
+        size = islands.attrs.get("island_sizes", {}).get(isl, "?")
+        weak_pairs = []
+        if knn is not None:
+            members = [m for ms in owners.values() for m in ms]
+            for i, a in enumerate(members):
+                for b in members[i + 1 :]:
+                    if by_label[a] == by_label[b] or a not in knn.index or b not in knn.columns:
+                        continue
+                    mix = max(float(knn.loc[a, b]), float(knn.loc[b, a]))
+                    if mix >= _WEAK_SEPARATION_MAX_PCT:
+                        weak_pairs.append((a, b, mix))
+        if weak_pairs:
+            hard.append(
+                f"{isl} ({size} cells): "
+                + "; ".join(f"{a!r} <-> {b!r} share {mix:.1f}% of kNN edges" for a, b, mix in weak_pairs)
+                + f" (>= {_WEAK_SEPARATION_MAX_PCT}%) despite being split across lineages "
+                + "; ".join(f"{n!r}: {ms}" for n, ms in owners.items())
+                + " — no real separation, put them in the same lineage (confirm_shared_islands cannot override this)"
+            )
+        else:
             soft.append(
-                f"{isl} ({islands.attrs.get('island_sizes', {}).get(isl, '?')} cells) is shared by labels "
+                f"{isl} ({size} cells) is shared by labels "
                 f"in different lineages: " + "; ".join(f"{n!r}: {ms}" for n, ms in owners.items())
             )
     return hard, soft
@@ -237,7 +269,7 @@ def lineage_evidence(ad, coarse_col, batch_col, outdir):
     return counts, knn, paga, islands
 
 
-def validate_plan(plan, labels, counts, min_cells, islands=None):
+def validate_plan(plan, labels, counts, min_cells, islands=None, knn=None):
     """Host rules. Returns (problems, normalised_plan). Below-threshold
     lineages are forced to zoom=false (recorded), not rejected. With an
     islands table: pooling separate islands is rejected; splitting a shared
@@ -305,7 +337,7 @@ def validate_plan(plan, labels, counts, min_cells, islands=None):
         _lineage_slugs(ln["name"] for ln in out)
     except ValueError as exc:
         return [str(exc)], None
-    hard, soft = island_problems(out, islands)
+    hard, soft = island_problems(out, islands, knn)
     problems += hard
     if soft and not plan.get("confirm_shared_islands", False):
         problems += [
@@ -390,7 +422,7 @@ async def _run(coarse_col, labels, counts, knn, paga, islands, outdir, min_cells
             plan = json.loads(args["plan_json"])
         except json.JSONDecodeError as e:
             return {"content": [{"type": "text", "text": f"JSON parse error: {e}"}], "is_error": True}
-        problems, norm = validate_plan(plan, labels, counts, min_cells, islands)
+        problems, norm = validate_plan(plan, labels, counts, min_cells, islands, knn)
         if problems:
             return {
                 "content": [{"type": "text", "text": "fix and resubmit:\n- " + "\n- ".join(problems)}],
@@ -449,7 +481,7 @@ def plan_lineages(
         # Recheck current evidence, including the archived explicit island review.
         candidate = dict(plan)
         candidate["confirm_shared_islands"] = bool(plan.get("host_warnings"))
-        problems, normalized = validate_plan(candidate, list(counts.index), counts, min_cells, islands)
+        problems, normalized = validate_plan(candidate, list(counts.index), counts, min_cells, islands, knn)
         if problems or plan.get("min_cells") != min_cells or plan.get("coarse_col") != coarse_col:
             raise ValueError(f"recorded plan does not match current input/options: {problems}; use --force")
         if normalized["lineages"] != plan["lineages"]:
