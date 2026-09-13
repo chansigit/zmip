@@ -183,12 +183,14 @@ def island_problems(lineages, islands, knn=None):
         if knn is not None:
             members = [(label, owner) for owner, labels in owners.items() for label in labels]
             for i, (a, owner) in enumerate(members):
-                for b, other in members[i + 1:]:
+                for b, other in members[i + 1 :]:
                     if owner != other and a in knn.index and b in knn.index and a in knn.columns and b in knn.columns:
                         evidence.append(f"{a!r}->{b!r} {knn.loc[a, b]:.2f}%, reverse {knn.loc[b, a]:.2f}%")
-        soft.append(f"{island} ({size} cells) is shared by labels in different lineages: "
-                    + "; ".join(f"{name!r}: {labels}" for name, labels in owners.items())
-                    + ("; kNN edge shares: " + "; ".join(evidence) if evidence else ""))
+        soft.append(
+            f"{island} ({size} cells) is shared by labels in different lineages: "
+            + "; ".join(f"{name!r}: {labels}" for name, labels in owners.items())
+            + ("; kNN edge shares: " + "; ".join(evidence) if evidence else "")
+        )
     return hard, soft
 
 
@@ -331,8 +333,10 @@ def validate_plan(plan, labels, counts, min_cells, islands=None, knn=None):
         problems.append("shared_island_reviews contains unknown or stale island names")
     for island in shared:
         if not isinstance(reviews.get(island), str) or not reviews[island].strip():
-            problems.append(f"{island}: provide shared_island_reviews[{island!r}] explaining the split "
-                            "using expression/graph evidence and any uncertainty; a boolean confirmation is insufficient")
+            problems.append(
+                f"{island}: provide shared_island_reviews[{island!r}] explaining the split "
+                "using expression/graph evidence and any uncertainty; a boolean confirmation is insufficient"
+            )
     if soft and not plan.get("confirm_shared_islands", False):
         problems += [
             f"{w} — labels on one island belong to one lineage unless the picture shows a real gap; "

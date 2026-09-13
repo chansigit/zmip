@@ -11,6 +11,11 @@ def test_reexports_every_helper_from_its_public_msp_module():
     for name in ("csv_table", "img"):
         assert getattr(msp_compat, name) is getattr(report, name)
     assert set(msp_compat.__all__) == {
-        "components", "csv_table", "img", "palette", "plot_annotation",
-        "prior_label_columns", "subcluster_once",
+        "components",
+        "csv_table",
+        "img",
+        "palette",
+        "plot_annotation",
+        "prior_label_columns",
+        "subcluster_once",
     }
