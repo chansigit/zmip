@@ -108,7 +108,13 @@ def test_lineage_completion_is_invalidated_before_failed_rerun(tmp_path, monkeyp
         sub.obs[key + lineage.PREV_SUFFIX] = "A"
     (tmp_path / "zmip_plan.json").write_text("{}")
     (tmp_path / "lineage_markers.csv").write_text("lineage,gene\n")
-    monkeypatch.setattr(lineage, "integrate_adata", lambda *a, **k: None)
+    integrations = []
+
+    def integrate(data, batch, out, **kwargs):
+        integrations.append(out)
+        data.write_h5ad(Path(out) / "integrated.h5ad")
+
+    monkeypatch.setattr(lineage, "integrate_adata", integrate)
     monkeypatch.setattr(lineage, "score_foreign", lambda *a: [])
     monkeypatch.setattr(lineage, "save_single_umap", lambda *a, **k: None)
 
@@ -139,7 +145,17 @@ def test_lineage_completion_is_invalidated_before_failed_rerun(tmp_path, monkeyp
         effort=None,
         max_turns=1,
     )
+    with monkeypatch.context() as interrupted_agent:
+
+        def fail_annotation(*a, **kw):
+            raise RuntimeError("agent interrupted")
+
+        interrupted_agent.setattr(lineage, "annotate_lineage", fail_annotation)
+        with pytest.raises(RuntimeError, match="agent interrupted"):
+            lineage.run_lineage(*args, **kwargs)
+    assert not lineage.contract_done(tmp_path / "A")
     lineage.run_lineage(*args, **kwargs)
+    assert len(integrations) == 1
     root = tmp_path / "A"
     assert lineage.contract_done(root)
     (tmp_path / "lineage_markers.csv").write_text("lineage,gene\nA,G1\n")
@@ -151,6 +167,7 @@ def test_lineage_completion_is_invalidated_before_failed_rerun(tmp_path, monkeyp
         raise RuntimeError("integration interrupted")
 
     monkeypatch.setattr(lineage, "integrate_adata", interrupted)
+    (root / "integrated.h5ad").unlink()  # damaged computation must be rerun; intact computation now resumes
     with pytest.raises(RuntimeError, match="interrupted"):
         lineage.run_lineage(*args, **kwargs)
     # Every old public file is still present, but none can prove completion.
@@ -158,7 +175,7 @@ def test_lineage_completion_is_invalidated_before_failed_rerun(tmp_path, monkeyp
     assert not lineage.contract_done(root)
 
 
-@pytest.mark.parametrize("failure", [OSError("subset write failed"), KeyboardInterrupt(), "SIGTERM"])
+@pytest.mark.parametrize("failure", [OSError("subset write failed"), KeyboardInterrupt()])
 def test_pool_cleans_launched_process_on_parent_failure(tmp_path, monkeypatch, failure):
     real_popen = subprocess.Popen
     processes = []
@@ -218,9 +235,11 @@ def test_agent_model_pool_rotates_per_launched_lineage_when_opted_in(tmp_path, m
     monkeypatch.setenv("AGENT_MODEL_POOL_ROTATE", "1")
     # sorted biggest-first -> launch order C, B, A
     todo = [{"name": n, "coarse_labels": [n], "n_cells": c} for n, c in [("A", 10), ("B", 20), ("C", 30)]]
-    assert set(lineage.run_lineages_parallel(
-        None, todo, {"A", "B", "C"}, str(tmp_path), [], coarse_col="coarse", fine_col="fine"
-    )) == {"A", "B", "C"}
+    assert set(
+        lineage.run_lineages_parallel(
+            None, todo, {"A", "B", "C"}, str(tmp_path), [], coarse_col="coarse", fine_col="fine"
+        )
+    ) == {"A", "B", "C"}
     assert seen_pools == ["openai:m1,claude:m2", "claude:m2,openai:m1", "openai:m1,claude:m2"]
 
 
@@ -425,7 +444,9 @@ def test_cli_resume_reruns_only_damaged_lineage_and_force_replans(tmp_path, monk
     monkeypatch.setattr(plan_module, "_run", fake_agent)
     monkeypatch.setattr(plan_module, "lineage_evidence", lambda *a: (counts, None, None, None))
     monkeypatch.setattr(foreign, "lineage_markers", fake_markers)
-    monkeypatch.setattr(lineage, "integrate_adata", lambda *a, **k: None)
+    monkeypatch.setattr(
+        lineage, "integrate_adata", lambda data, batch, out, **kw: data.write_h5ad(Path(out) / "integrated.h5ad")
+    )
     monkeypatch.setattr(lineage, "score_foreign", lambda *a: [])
     monkeypatch.setattr(lineage, "save_single_umap", lambda *a, **k: None)
     monkeypatch.setattr(lineage, "annotate_lineage", fake_annotate)
@@ -461,13 +482,15 @@ def test_cli_resume_reruns_only_damaged_lineage_and_force_replans(tmp_path, monk
 def test_shared_island_requires_written_review_at_any_edge_share():
     counts = pd.DataFrame({"n_cells": [1000, 1000]}, index=["A", "B"])
     islands = pd.DataFrame({"island_1": [100.0, 100.0]}, index=["A", "B"])
-    candidate = {"lineages": [{"name": x, "coarse_labels": [x]} for x in counts.index],
-                 "confirm_shared_islands": True}
+    candidate = {"lineages": [{"name": x, "coarse_labels": [x]} for x in counts.index], "confirm_shared_islands": True}
     for mix in (2.0, 8.5, 15.0):
-        knn = pd.DataFrame([[100-mix, mix], [mix, 100-mix]], index=counts.index, columns=counts.index)
+        knn = pd.DataFrame([[100 - mix, mix], [mix, 100 - mix]], index=counts.index, columns=counts.index)
         problems, result = plan_module.validate_plan(candidate, list(counts.index), counts, 800, islands, knn)
         assert result is None and any("shared_island_reviews" in p for p in problems)
-        reviewed = {**candidate, "shared_island_reviews": {"island_1": "Distinct marker programs; graph separation uncertain"}}
+        reviewed = {
+            **candidate,
+            "shared_island_reviews": {"island_1": "Distinct marker programs; graph separation uncertain"},
+        }
         problems, result = plan_module.validate_plan(reviewed, list(counts.index), counts, 800, islands, knn)
         assert not problems and result["shared_island_reviews"] == reviewed["shared_island_reviews"]
         assert result["host_warnings"]

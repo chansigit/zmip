@@ -106,7 +106,13 @@ run. Global plots retain MSP's embedding. See the
 
 Repeat the same command to reuse completed, verified stages. Agent settings
 such as `--max-turns` or `--model` may differ between runs; only unfinished
-lineages use the new values. If you change the input, analysis settings, or
+work uses the new values. An unfinished lineage reuses its verified integration
+and restores accepted cluster submissions, including the cell labels of any
+subclusters. The host revalidates saved decisions before continuing.
+`SIGTERM` stops new lineage launches and lets running work reach a safe point;
+the CLI exits with code 3. Repeat the command to resume.
+
+If you change the input, analysis settings, or
 runtime, use a new output directory to keep both analyses, or add `--force`
 to recompute the plan and all selected lineages. To rebuild only the global
 report, run:

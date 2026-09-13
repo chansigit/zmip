@@ -37,6 +37,7 @@ import re
 import numpy as np
 import pandas as pd
 from harness_bridge import default_model
+from msp import checkpoint
 from msp.annotate import (
     BASE_KEY,
     CONFIDENCES,
@@ -568,6 +569,60 @@ async def _run_agent(
 
     state = {"key": BASE_KEY, "n_sub": 0}
     entries, holder = {}, {}
+    progress_path = os.path.join(outdir, ".annotation-progress.json")
+    identity = checkpoint.agent_identity(
+        ad,
+        outdir,
+        [
+            lineage,
+            list(lineage_labels),
+            list(other_labels),
+            batch_col,
+            species,
+            prior_cols,
+            paga,
+            pre_removed.tolist(),
+            foreign_cols,
+            other_keys,
+        ],
+        __file__,
+    )
+    saved = checkpoint.load(progress_path, identity)
+    if saved:
+        state = saved["state"]
+        checkpoint.restore_clustering(ad, state, saved["columns"], BASE_KEY, "zmip_sub")
+        entries = saved["entries"]
+        if not isinstance(entries, dict):
+            raise ValueError("invalid annotation checkpoint entries")
+        current_ids = cluster_order(ad.obs[state["key"]].astype(str))
+        known_ids = set(ad.obs[BASE_KEY].astype(str))
+        for labels in saved["columns"].values():
+            known_ids.update(labels)
+        for key, entry in entries.items():
+            # A split can leave an earlier merge pointing at its former parent.
+            # Preserve that accepted decision for correction; final validation still rejects it.
+            problems = _validate_cluster(entry, known_ids, lineage_labels, other_labels)
+            if problems or key not in current_ids or key != str(entry["cluster_id"]):
+                raise ValueError(f"invalid annotation checkpoint entry {key}: {problems}")
+            _guard_batch_action(entry)
+            if _validate_cluster(entry, known_ids, lineage_labels, other_labels):
+                raise ValueError(f"checkpoint entry {key} violates the batch-removal guard")
+        log.info(f"== [{lineage}] restored {len(entries)} accepted submissions, {state['n_sub']} splits")
+
+    def save_progress(**extra):
+        checkpoint.save(
+            progress_path,
+            identity,
+            {
+                "state": state,
+                "entries": entries,
+                "columns": {
+                    f"zmip_sub{i}": ad.obs[f"zmip_sub{i}"].astype(str).tolist() for i in range(1, state["n_sub"] + 1)
+                },
+                **extra,
+            },
+        )
+
     deg = DegCache(ad, outdir, pre_removed, label=f"zmip {lineage}")
     tables = DegTables(outdir, base_key=BASE_KEY)
     log.info(f"== [{lineage}] precomputed DEG tables loaded: {tables.n_rows} rows for keys {tables.keys}")
@@ -715,12 +770,13 @@ async def _run_agent(
                 del entries[c]
                 text += f"\n(discarded the earlier submission for {c}; submit its subclusters)"
             text += "\n(working clustering refined; all tools and submissions now use the new ids)"
+            save_progress()
         return {"content": [{"type": "text", "text": text}]}
 
     async def submit_cluster(args):
         try:
             e = json.loads(args["cluster_json"])
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, TypeError) as exc:
             return {"content": [{"type": "text", "text": f"JSON parse error: {exc}"}], "is_error": True}
         cur = current()
         problems = _validate_cluster(e, cur, lineage_labels, other_labels)
@@ -748,6 +804,7 @@ async def _run_agent(
         e.setdefault("remove_reason", None)
         e.setdefault("reassign_to", None)
         entries[e["cluster_id"]] = e
+        save_progress()
         left = [c for c in cur if c not in entries]
         tag = e["action"] + (f"→{e['reassign_to']}" if e["action"] == "reassign" else "")
         log.info(
@@ -819,6 +876,7 @@ async def _run_agent(
             )
         with open(os.path.join(outdir, "annotation_proposal.json"), "w") as fh:
             json.dump(holder["proposal"], fh, ensure_ascii=False, indent=2)
+        save_progress(final_args=args)
         return {"content": [{"type": "text", "text": "accepted"}], "_submitted": holder["proposal"]}
 
     tools = [
@@ -910,11 +968,19 @@ async def _run_agent(
         ),
     ]
     try:
+        if "final_args" in saved:
+            # Re-run final validation; an over-budget saved decision was already reaffirmed.
+            holder["budget_warned"] = True
+            final = await finalize_annotation(saved["final_args"])
+            if "_submitted" not in final:
+                raise ValueError("saved final annotation no longer passes host validation")
+            return final["_submitted"]
         result = await run_agent(
             tools=tools,
             submit_tool="finalize_annotation",
             prompt=f"Zoom-in annotate lineage {lineage!r}: one Task per base cluster, submit_cluster each, "
-            "then finalize_annotation.",
+            "then finalize_annotation. Call annotation_status FIRST: accepted entries and subclusters "
+            "survive restarts; continue the pending clusters.",
             system_prompt=_system_prompt(
                 outdir,
                 lineage,
@@ -937,6 +1003,8 @@ async def _run_agent(
         )
     except AgentIncompleteError as e:
         raise RuntimeError(f"{e} ({len(entries)} submitted)") from None
+    finally:
+        tables.close()
     if result.transcript_text:
         with open(os.path.join(outdir, "annotation_notes.md"), "w") as fh:
             fh.write(result.transcript_text)

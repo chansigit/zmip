@@ -48,10 +48,12 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pandas as pd
 import scanpy as sc
 from harness_bridge import configure_logging, rotate_model_pool
+from harness_bridge.control import pausable, pause_requested, pause_signals, safe_point
 from msp.integrate import integrate_adata
 from msp.plots import save_single_umap
 from msp.resources import available_cpus, available_memory_bytes, current_rss_bytes
@@ -139,6 +141,7 @@ def validate_resolutions(resolutions):
     return values
 
 
+@pause_signals()
 def run_lineage(
     sub,
     name,
@@ -164,25 +167,65 @@ def run_lineage(
     """sub: the lineage subset from subset_for(). Writes <outdir>/<slug>/ and
     returns its result record."""
     resolutions = validate_resolutions(resolutions)
+    safe_point()
     d = lineage_dir(outdir, name)
     os.makedirs(d, exist_ok=True)
     cache.invalidate(d, "complete")
     generation = _generation(outdir)
     expected = sub.obs_names.copy()
-    log.info(f"== [{name}] re-embedding {sub.n_obs} cells")
-    integrate_adata(
+    from msp.checkpoint import data_identity
+
+    from .runtime import runtime_identity
+
+    compute_identity = data_identity(
         sub,
-        batch_col,
-        d,
-        species=species,
-        resolutions=tuple(resolutions),
-        n_top_genes=n_top_genes,
-        n_pcs=n_pcs,
-        n_neighbors=n_neighbors,
-        harmony_kwargs=harmony_kwargs,
-        inputs=[h5ad_path],
-        meta_extra={"zmip_lineage": name, "zmip_coarse_labels": list(labels)},
+        [
+            generation,
+            name,
+            list(labels),
+            batch_col,
+            species,
+            resolutions,
+            n_top_genes,
+            n_pcs,
+            n_neighbors,
+            harmony_kwargs,
+            str(h5ad_path),
+            runtime_identity(),
+        ],
     )
+
+    def compute_files():
+        return [
+            "integrated.h5ad",
+            *sorted(p.name for p in Path(d).glob("*.csv") if not p.name.startswith(("annotation_", "foreign_"))),
+        ]
+
+    if cache.valid(d, "compute", compute_identity, compute_files()):
+        sub = sc.read_h5ad(os.path.join(d, "integrated.h5ad"))
+        log.info(f"== [{name}] restored completed integration; continuing annotation")
+    else:
+        progress = Path(d) / ".annotation-progress.json"
+        if progress.exists():
+            history = Path(d) / ".msp-history"
+            history.mkdir(exist_ok=True)
+            os.replace(progress, history / f"annotation-progress-{time.time_ns()}.json")
+        log.info(f"== [{name}] re-embedding {sub.n_obs} cells")
+        integrate_adata(
+            sub,
+            batch_col,
+            d,
+            species=species,
+            resolutions=tuple(resolutions),
+            n_top_genes=n_top_genes,
+            n_pcs=n_pcs,
+            n_neighbors=n_neighbors,
+            harmony_kwargs=harmony_kwargs,
+            inputs=[h5ad_path],
+            meta_extra={"zmip_lineage": name, "zmip_coarse_labels": list(labels)},
+        )
+        cache.seal(d, "compute", compute_identity, compute_files())
+    safe_point()
     figdir = os.path.join(d, "figures")
     log.info(f"== [{name}] foreign-lineage scores")
     foreign_cols = score_foreign(sub, markers, name, keys_for_foreign, d, figdir)
@@ -221,6 +264,7 @@ def run_lineage(
     finally:
         kept.file.close()
     cache.seal(d, "complete", generation, CONTRACT_FILES)
+    safe_point()
     return result
 
 
@@ -260,11 +304,6 @@ def _signal_group(proc, sig):
         os.killpg(proc.pid, sig)
 
 
-def _terminate_pool(signum, frame):
-    # Convert scheduler termination into an exception so the pool's finally runs.
-    raise SystemExit(128 + signum)
-
-
 def _finish_child(proc, log_thread):
     proc.wait()
     # A finished lineage must not leave harness descendants holding its pipe.
@@ -293,6 +332,7 @@ def _stop_children(running):
         _finish_child(proc, log_thread)
 
 
+@pause_signals()
 def run_lineages_parallel(ad, todo, all_labels, outdir, child_args, *, coarse_col, fine_col):
     """todo: plan entries (name, coarse_labels, n_cells) still to run. Writes
     each lineage's subset to <lineage dir>/subset.h5ad and runs
@@ -315,9 +355,7 @@ def run_lineages_parallel(ad, todo, all_labels, outdir, child_args, *, coarse_co
     pending = list(todo)
     running = {}  # name -> (proc, est_bytes, t0, log_thread)
     failed, finished = {}, []
-    main_thread = threading.current_thread() is threading.main_thread()
-    if main_thread:
-        previous_term = signal.signal(signal.SIGTERM, _terminate_pool)
+    paused = False
     try:
         while pending or running:
             # reap
@@ -332,12 +370,16 @@ def run_lineages_parallel(ad, todo, all_labels, outdir, child_args, *, coarse_co
                 if rc == 0 and contract_done(lineage_dir(outdir, name)):
                     finished.append(name)
                     log.info(f"== [{name}] lineage done in {took:.1f} min")
+                elif rc == 3:
+                    paused = True
+                    log.info(f"== [{name}] lineage paused after {took:.1f} min")
                 else:
                     failed[name] = rc
                     log.warning(f"== [{name}] lineage FAILED (exit {rc}) after {took:.1f} min")
             # launch
             used = sum(est for _, est, _, _ in running.values())
-            while pending and len(running) < max_parallel:
+            paused = paused or pause_requested()
+            while pending and len(running) < max_parallel and not paused and not pause_requested():
                 ln = pending[0]
                 est = _estimate_bytes(ln["n_cells"])
                 if running and used + est > budget:
@@ -348,6 +390,9 @@ def run_lineages_parallel(ad, todo, all_labels, outdir, child_args, *, coarse_co
                 os.makedirs(d, exist_ok=True)
                 subset_path = os.path.join(d, SUBSET_FILE)
                 subset_for(ad, ln["coarse_labels"], coarse_col, fine_col).write_h5ad(subset_path)
+                if pause_requested():
+                    paused = True
+                    break
                 cmd = [sys.executable, "-m", "zmip.lineage", outdir, name, "--subset", subset_path, *child_args]
                 child_env = env
                 if rotate:
@@ -370,25 +415,26 @@ def run_lineages_parallel(ad, todo, all_labels, outdir, child_args, *, coarse_co
                     f"== [{name}] lineage started: {ln['n_cells']} cells, est {est / 2**30:.1f} GiB, "
                     f"{len(running)} running, {len(pending)} waiting"
                 )
+            if paused and not running:
+                break
             if running:
                 time.sleep(5)
     finally:
         # Covers subset writes, spawn failures, validation errors and Ctrl-C.
-        if main_thread:
-            signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        try:
-            _stop_children(running)
-        finally:
-            if main_thread:
-                signal.signal(signal.SIGTERM, previous_term)
+        _stop_children(running)
     if failed:
         raise RuntimeError(f"zmip lineage(s) failed: {failed} — re-run to resume (finished lineages are skipped)")
+    if paused:
+        from harness_bridge.control import PauseRequested
+
+        raise PauseRequested()
     return {name: load_result(lineage_dir(outdir, name)) for name in finished}
 
 
 # ---------------------------------------------------------------- subprocess entry
 
 
+@pausable
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="zmip.lineage", description="run ONE zoom-in lineage (used by zmip's pool)")
     parser.add_argument("outdir")
@@ -445,4 +491,5 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    if rc := main():
+        raise SystemExit(rc)

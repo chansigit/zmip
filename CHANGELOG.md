@@ -4,6 +4,12 @@ All notable changes to zmip. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 0.3.9 - 2026-09-12
+
+- Reuse verified integration for interrupted lineages and persist accepted annotations with cell-aligned subcluster assignments.
+- Revalidate saved entries and final proposals; invalidate annotation progress when integration must be recomputed.
+- Pause new lineage launches on SIGTERM, drain running work and exit 3.
+
 ## 0.3.8 - 2026-09-12
 
 - Require a written review for each shared UMAP island split across lineages; graph mixing is evidence, not a fixed-percentage merge rule.

@@ -34,6 +34,8 @@ from . import cache, publication
 from .runtime import check_runtime
 
 check_runtime()
+from harness_bridge.control import pause_signals, safe_point
+
 from .cli import add_integration_options, parse_harmony
 from .foreign import MARKER_COLUMNS, lineage_markers
 from .lineage import (
@@ -94,21 +96,25 @@ except ValueError as exc:
 
 
 out = os.path.abspath(args.outdir)
-with cache.lock_run(out):
+with pause_signals(), cache.lock_run(out):
+    safe_point()
     publication.recover(out)
     # Check the on-disk input before loading or modifying any scientific outputs.
     # Agent settings steer how decisions are produced; they are recorded for the audit trail
     # but do not invalidate finished stages (raising --max-turns must not force a full rerun).
     agent_keys = {"model", "effort", "max_turns", "language"}
     options = {
-        k: v for k, v in vars(args).items() if k not in {"h5ad", "outdir", "force", "report_context", "design_context"} | agent_keys
+        k: v
+        for k, v in vars(args).items()
+        if k not in {"h5ad", "outdir", "force", "report_context", "design_context"} | agent_keys
     }
     agent = {k: getattr(args, k) for k in sorted(agent_keys)}
     agent["harness"] = agent_config.as_manifest()["harness"]
     agent["harness_options"] = {k: os.environ.get(k) for k in ("DSH_PROVIDER", "OPENAI_AGENTS_API")}
     # Endpoint identity matters, but do not copy URLs (possibly containing credentials) into receipts.
     agent["endpoint_sha256"] = {
-        k: hashlib.sha256(os.environ.get(k, "").encode()).hexdigest() for k in ("DOUBAO_BASE_URL", "ANTHROPIC_BASE_URL", "OPENROUTER_BASE_URL", "VLLM_BASE_URL")
+        k: hashlib.sha256(os.environ.get(k, "").encode()).hexdigest()
+        for k in ("DOUBAO_BASE_URL", "ANTHROPIC_BASE_URL", "OPENROUTER_BASE_URL", "VLLM_BASE_URL")
     }
     generation = cache.prepare_run(out, args.h5ad, options, force=args.force, agent=agent)
     write_report_context(out, args.report_context)
@@ -138,6 +144,7 @@ with cache.lock_run(out):
         force=not cache.valid(out, "plan", generation, ["zmip_plan.json"]),
     )
     cache.seal(out, "plan", generation, ["zmip_plan.json"])
+    safe_point()
     label_to_lineage = {lab: ln["name"] for ln in plan["lineages"] for lab in ln["coarse_labels"]}
     ad.obs["_zmip_lineage"] = ad.obs[args.coarse_col].astype(str).map(label_to_lineage).astype("category")
     for ln in plan["lineages"]:
@@ -164,6 +171,7 @@ with cache.lock_run(out):
         markers = lineage_markers(ad, "_zmip_lineage", out)
 
     cache.seal(out, "markers", marker_generation, ["lineage_markers.csv"])
+    safe_point()
     # The planning helper column must not leak into the published H5AD.
     del ad.obs["_zmip_lineage"]
 
@@ -197,6 +205,7 @@ with cache.lock_run(out):
     )
     if len(todo) == 1 or os.environ.get("ZMIP_PARALLEL", "").strip() == "1":
         for ln in todo:  # in-process, exactly the old sequential path
+            safe_point()
             sub = subset_for(ad, ln["coarse_labels"], args.coarse_col, args.fine_col)
             results[ln["name"]] = run_lineage(sub, ln["name"], ln["coarse_labels"], all_labels, markers, out, **common)
             del sub
@@ -233,5 +242,6 @@ with cache.lock_run(out):
             )
         )
 
+    safe_point()
     merge_back(ad, plan, results, out, coarse_col=args.coarse_col, fine_col=args.fine_col, with_report=True)
     log.info(f"== report: {os.path.join(out, 'report.html')}")
