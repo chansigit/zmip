@@ -547,6 +547,11 @@ def _annotation_status(entries, clusters, cluster="", offset=0, *, cluster_key="
     return _status_result(text)
 
 
+def _selected_genes(ad, genes, key, selected):
+    subset = ad[ad.obs[key].astype(str).isin(list(map(str, selected)))] if selected else ad
+    return gene_table(subset, genes, key)
+
+
 async def _run_agent(
     ad,
     outdir,
@@ -703,9 +708,8 @@ async def _run_agent(
         genes = args["genes"]
         if isinstance(genes, str):
             genes = [g for g in genes.replace(",", " ").split() if g]
-        # Keep the MSP 0.3 three-argument contract; AnnData slicing is a view.
-        subset = ad[ad.obs[state["key"]].astype(str).isin(list(map(str, selected)))] if selected else ad
-        text = gene_table(subset, genes, state["key"])
+        from msp.agent_data import apply
+        text = apply(_selected_genes, ad, genes, state["key"], selected)
         if len(text.encode("utf-8")) > 16 * 1024:
             return response(
                 "Expression table exceeds the 16 KiB tool-result limit; no expression rows returned. "
@@ -762,7 +766,8 @@ async def _run_agent(
                 "is_error": True,
             }
         new_key = f"zmip_sub{state['n_sub'] + 1}"
-        n, text = subcluster_once(ad, state["key"], c, float(args["resolution"]), new_key, pre_removed)
+        from msp.agent_data import apply
+        n, text = apply(subcluster_once, ad, state["key"], c, float(args["resolution"]), new_key, pre_removed)
         if n >= 2:
             state["n_sub"] += 1
             state["key"] = new_key
@@ -1059,16 +1064,20 @@ def annotate_lineage(
             max_turns,
         )
     )
-    removed, reassigned = _apply(ad, proposal["cluster_key"], proposal, pre_removed, lineage)
-    removed.to_csv(os.path.join(outdir, "annotation_removed.csv"), index=False)
-    reassigned.to_csv(os.path.join(outdir, "annotation_reassigned.csv"), index=False)
-    kept = ad[(ad.obs["msp_ann_action"] == "keep").values].copy()
-    plot_annotation(ad, kept, os.path.join(outdir, "figures"))
-    tmp = os.path.join(outdir, "annotated.tmp.h5ad")
-    kept.write_h5ad(tmp)
-    os.replace(tmp, os.path.join(outdir, "annotated.h5ad"))
+    from msp.agent_data import materialize
+    with materialize(ad) as full:
+        removed, reassigned = _apply(full, proposal["cluster_key"], proposal, pre_removed, lineage)
+        removed.to_csv(os.path.join(outdir, "annotation_removed.csv"), index=False)
+        reassigned.to_csv(os.path.join(outdir, "annotation_reassigned.csv"), index=False)
+        kept = full[(full.obs["msp_ann_action"] == "keep").values].copy()
+        plot_annotation(full, kept, os.path.join(outdir, "figures"))
+        tmp = os.path.join(outdir, "annotated.tmp.h5ad")
+        kept.write_h5ad(tmp)
+        os.replace(tmp, os.path.join(outdir, "annotated.h5ad"))
     from msp.report import compose_title
 
-    generate_report(outdir, title=compose_title("zoom-in lineage (zmip)", outdir, subject=lineage))
+    from msp.agent_data import work
+    with work():
+        generate_report(outdir, title=compose_title("zoom-in lineage (zmip)", outdir, subject=lineage))
     log.info(f"== [{lineage}] removed {len(removed)}, reassigned {len(reassigned)}, kept {kept.n_obs}/{ad.n_obs}")
     return proposal, removed, reassigned
