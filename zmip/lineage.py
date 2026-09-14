@@ -179,9 +179,9 @@ def run_lineage(
         generation = _generation(outdir)
         expected = sub.obs_names.copy()
         from msp.checkpoint import data_identity
-    
+
         from .runtime import runtime_identity
-    
+
         compute_identity = data_identity(
             sub,
             [
@@ -199,13 +199,13 @@ def run_lineage(
                 runtime_identity(),
             ],
         )
-    
+
         def compute_files():
             return [
                 "integrated.h5ad",
                 *sorted(p.name for p in Path(d).glob("*.csv") if not p.name.startswith(("annotation_", "foreign_"))),
             ]
-    
+
         if cache.valid(d, "compute", compute_identity, compute_files()):
             sub = sc.read_h5ad(os.path.join(d, "integrated.h5ad"))
             log.info(f"== [{name}] restored completed integration; continuing annotation")
