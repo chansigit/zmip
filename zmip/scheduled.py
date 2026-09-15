@@ -23,7 +23,7 @@ def partitions(obs):
 def validate_types(proposal, obs, own_labels):
     """Validate identity at 1.0, independently of quality/removal at 2.0."""
     partitions(obs)
-    if proposal.get('cluster_key') != TYPE_KEY or not isinstance(proposal.get('clusters'), list):
+    if not isinstance(proposal, dict) or proposal.get('cluster_key') != TYPE_KEY or not isinstance(proposal.get('clusters'), list):
         raise ValueError('Type proposal must name the 1.0 clustering and contain clusters')
     clusters = sorted(obs[TYPE_KEY].astype(str).unique())
     entries = {}
@@ -46,7 +46,7 @@ def validate_types(proposal, obs, own_labels):
 def validate_quality(proposal, obs, other_labels):
     """Each QC group partitions into disjoint, explicitly named type intersections."""
     table = partitions(obs)
-    if proposal.get('cluster_key') != QUALITY_KEY or not isinstance(proposal.get('clusters'), list):
+    if not isinstance(proposal, dict) or proposal.get('cluster_key') != QUALITY_KEY or not isinstance(proposal.get('clusters'), list):
         raise ValueError('Quality proposal must name the 2.0 clustering and contain clusters')
     normalized, seen = [], set()
     for group in proposal['clusters']:
@@ -121,7 +121,7 @@ def apply_decisions(obs, types, quality, own_labels, other_labels, lineage, pre_
                 reassigned.update({cell: decision['reassign_to'] for cell in ids})
     removed = out.index.isin(reasons)
     out['msp_ann_action'] = pd.Categorical(np.where(removed, 'remove', 'keep'))
-    out['zmip_reassigned_to'] = pd.Series(reassigned, dtype=object).reindex(out.index).where(~removed, None)
+    out['zmip_reassigned_to'] = pd.Series(reassigned, dtype=object).reindex(out.index).where(~removed, None).astype('category')
     rm = pd.DataFrame({'cell': out.index[removed], 'lineage': lineage,
         'cluster': t.loc[removed].to_numpy(), 'quality_cluster': q.loc[removed].to_numpy()})
     rm['reasons'] = [reasons[c] for c in rm.cell]
