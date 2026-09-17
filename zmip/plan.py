@@ -475,7 +475,9 @@ def plan_lineages(
     from harness_bridge import default_model
 
     path = os.path.join(outdir, "zmip_plan.json")
-    counts, knn, paga, islands = lineage_evidence(ad, coarse_col, batch_col, outdir)
+    from msp.agent_data import materialize
+    with materialize(ad) as full:
+        counts, knn, paga, islands = lineage_evidence(full, coarse_col, batch_col, outdir)
     if os.path.exists(path) and not force:
         with open(path) as f:
             plan = json.load(f)

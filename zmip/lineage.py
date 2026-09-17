@@ -117,7 +117,8 @@ def load_result(d):
 
 def subset_for(ad, labels, coarse_col, fine_col):
     """The lineage's cells with last round's labels carried as *_prev columns."""
-    sub = ad[ad.obs[coarse_col].astype(str).isin(labels).values].copy()
+    selected = ad[ad.obs[coarse_col].astype(str).isin(labels).values]
+    sub = selected.to_memory() if selected.isbacked else selected.copy()
     for c in PREVIOUS_COLS:
         src = {"msp_ann_coarse": coarse_col, "msp_ann_fine": fine_col}[c]
         sub.obs[c + PREV_SUFFIX] = sub.obs[src].astype(str).astype("category")
@@ -166,80 +167,91 @@ def run_lineage(
 ):
     """sub: the lineage subset from subset_for(). Writes <outdir>/<slug>/ and
     returns its result record."""
-    resolutions = validate_resolutions(resolutions)
-    safe_point()
-    d = lineage_dir(outdir, name)
-    os.makedirs(d, exist_ok=True)
-    cache.invalidate(d, "complete")
-    generation = _generation(outdir)
-    expected = sub.obs_names.copy()
-    from msp.checkpoint import data_identity
+    from msp.agent_data import work
+    with work():
+        if isinstance(sub, (str, Path)):
+            sub = sc.read_h5ad(sub)
+        resolutions = validate_resolutions(resolutions)
+        safe_point()
+        d = lineage_dir(outdir, name)
+        os.makedirs(d, exist_ok=True)
+        cache.invalidate(d, "complete")
+        generation = _generation(outdir)
+        expected = sub.obs_names.copy()
+        from msp.checkpoint import data_identity
 
-    from .runtime import runtime_identity
+        from .runtime import runtime_identity
 
-    compute_identity = data_identity(
-        sub,
-        [
-            generation,
-            name,
-            list(labels),
-            batch_col,
-            species,
-            resolutions,
-            n_top_genes,
-            n_pcs,
-            n_neighbors,
-            harmony_kwargs,
-            str(h5ad_path),
-            runtime_identity(),
-        ],
-    )
-
-    def compute_files():
-        return [
-            "integrated.h5ad",
-            *sorted(p.name for p in Path(d).glob("*.csv") if not p.name.startswith(("annotation_", "foreign_"))),
-        ]
-
-    if cache.valid(d, "compute", compute_identity, compute_files()):
-        sub = sc.read_h5ad(os.path.join(d, "integrated.h5ad"))
-        log.info(f"== [{name}] restored completed integration; continuing annotation")
-    else:
-        progress = Path(d) / ".annotation-progress.json"
-        if progress.exists():
-            history = Path(d) / ".msp-history"
-            history.mkdir(exist_ok=True)
-            os.replace(progress, history / f"annotation-progress-{time.time_ns()}.json")
-        log.info(f"== [{name}] re-embedding {sub.n_obs} cells")
-        integrate_adata(
+        compute_identity = data_identity(
             sub,
-            batch_col,
-            d,
-            species=species,
-            resolutions=tuple(resolutions),
-            n_top_genes=n_top_genes,
-            n_pcs=n_pcs,
-            n_neighbors=n_neighbors,
-            harmony_kwargs=harmony_kwargs,
-            inputs=[h5ad_path],
-            meta_extra={"zmip_lineage": name, "zmip_coarse_labels": list(labels)},
+            [
+                generation,
+                name,
+                list(labels),
+                batch_col,
+                species,
+                resolutions,
+                n_top_genes,
+                n_pcs,
+                n_neighbors,
+                harmony_kwargs,
+                str(h5ad_path),
+                runtime_identity(),
+            ],
         )
-        cache.seal(d, "compute", compute_identity, compute_files())
-    safe_point()
-    figdir = os.path.join(d, "figures")
-    log.info(f"== [{name}] foreign-lineage scores")
-    foreign_cols = score_foreign(sub, markers, name, keys_for_foreign, d, figdir)
-    for c in PREVIOUS_COLS:
-        col = c + PREV_SUFFIX
-        n = sub.obs[col].nunique()
-        save_single_umap(
-            sub,
-            col,
-            os.path.join(figdir, f"umap_{col}.png"),
-            repel=True,
-            repel_fontsize=8 if n > 15 else 11,
-            figsize=(9, 9) if n > 15 else None,
-        )
+
+        def compute_files():
+            return [
+                "integrated.h5ad",
+                *sorted(p.name for p in Path(d).glob("*.csv") if not p.name.startswith(("annotation_", "foreign_"))),
+            ]
+
+        if cache.valid(d, "compute", compute_identity, compute_files()):
+            sub = sc.read_h5ad(os.path.join(d, "integrated.h5ad"))
+            log.info(f"== [{name}] restored completed integration; continuing annotation")
+        else:
+            progress = Path(d) / ".annotation-progress.json"
+            if progress.exists():
+                history = Path(d) / ".msp-history"
+                history.mkdir(exist_ok=True)
+                os.replace(progress, history / f"annotation-progress-{time.time_ns()}.json")
+            log.info(f"== [{name}] re-embedding {sub.n_obs} cells")
+            integrate_adata(
+                sub,
+                batch_col,
+                d,
+                species=species,
+                resolutions=tuple(resolutions),
+                n_top_genes=n_top_genes,
+                n_pcs=n_pcs,
+                n_neighbors=n_neighbors,
+                harmony_kwargs=harmony_kwargs,
+                inputs=[h5ad_path],
+                meta_extra={"zmip_lineage": name, "zmip_coarse_labels": list(labels)},
+            )
+            cache.seal(d, "compute", compute_identity, compute_files())
+        safe_point()
+        figdir = os.path.join(d, "figures")
+        log.info(f"== [{name}] foreign-lineage scores")
+        foreign_cols = score_foreign(sub, markers, name, keys_for_foreign, d, figdir)
+        for c in PREVIOUS_COLS:
+            col = c + PREV_SUFFIX
+            n = sub.obs[col].nunique()
+            save_single_umap(
+                sub,
+                col,
+                os.path.join(figdir, f"umap_{col}.png"),
+                repel=True,
+                repel_fontsize=8 if n > 15 else 11,
+                figsize=(9, 9) if n > 15 else None,
+            )
+        # The agent holds metadata only; expression is reloaded for tools/finalization.
+        from msp.agent_data import metadata
+        agent_input = Path(d) / '.agent-input.h5ad'
+        sub.write_h5ad(agent_input.with_suffix('.tmp.h5ad'))
+        os.replace(agent_input.with_suffix('.tmp.h5ad'), agent_input)
+        del sub
+    sub = metadata(agent_input)
     annotate_lineage(
         sub,
         d,
@@ -389,11 +401,19 @@ def run_lineages_parallel(ad, todo, all_labels, outdir, child_args, *, coarse_co
                 d = lineage_dir(outdir, name)
                 os.makedirs(d, exist_ok=True)
                 subset_path = os.path.join(d, SUBSET_FILE)
-                subset_for(ad, ln["coarse_labels"], coarse_col, fine_col).write_h5ad(subset_path)
+                from msp.agent_data import work
+                with work():
+                    source = sc.read_h5ad(ad, backed='r') if isinstance(ad, (str, Path)) else ad
+                    try:
+                        subset_for(source, ln["coarse_labels"], coarse_col, fine_col).write_h5ad(subset_path)
+                    finally:
+                        if source is not ad:
+                            source.file.close()
+                        del source
                 if pause_requested():
                     paused = True
                     break
-                cmd = [sys.executable, "-m", "zmip.lineage", outdir, name, "--subset", subset_path, *child_args]
+                cmd = [sys.executable, "-m", __name__, outdir, name, "--subset", subset_path, *child_args]
                 child_env = env
                 if rotate:
                     child_env = {**env, "AGENT_MODEL_POOL": rotate_model_pool(pool_spec, launched)}
@@ -464,11 +484,9 @@ def main(argv=None):
         os.path.join(args.outdir, "lineage_markers.csv"), keep_default_na=False, dtype={"lineage": str, "gene": str}
     )
     markers = {g: mk.loc[mk["lineage"] == g, "gene"].tolist() for g in mk["lineage"].unique()}
-    sub = sc.read_h5ad(args.subset)
-    os.remove(args.subset)
     keys_for_foreign = [f"msp_leiden_r{r}" for r in args.resolutions if r in (1.0, 2.0)]
     run_lineage(
-        sub,
+        args.subset,
         args.name,
         entry["coarse_labels"],
         all_labels,

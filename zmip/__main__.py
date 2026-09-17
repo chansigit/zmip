@@ -119,7 +119,8 @@ with pause_signals(), cache.lock_run(out):
     generation = cache.prepare_run(out, args.h5ad, options, force=args.force, agent=agent)
     write_report_context(out, args.report_context)
     write_design_context(out, args.design_context)
-    ad = sc.read_h5ad(args.h5ad)
+    from msp.agent_data import metadata, materialize
+    ad = metadata(args.h5ad)
     if not ad.obs_names.is_unique:
         sys.exit("input cell identifiers must be unique")
     meta = ad.uns.get("msp", {})
@@ -168,7 +169,8 @@ with pause_signals(), cache.lock_run(out):
         markers = {g: mk.loc[mk["lineage"] == g, "gene"].tolist() for g in mk["lineage"].unique()}
     else:
         log.info("== lineage-level markers (for foreign-lineage scores)")
-        markers = lineage_markers(ad, "_zmip_lineage", out)
+        with materialize(ad) as full:
+            markers = lineage_markers(full, "_zmip_lineage", out)
 
     cache.seal(out, "markers", marker_generation, ["lineage_markers.csv"])
     safe_point()
@@ -203,13 +205,10 @@ with pause_signals(), cache.lock_run(out):
         effort=args.effort,
         max_turns=args.max_turns,
     )
-    if len(todo) == 1 or os.environ.get("ZMIP_PARALLEL", "").strip() == "1":
-        for ln in todo:  # in-process, exactly the old sequential path
-            safe_point()
-            sub = subset_for(ad, ln["coarse_labels"], args.coarse_col, args.fine_col)
-            results[ln["name"]] = run_lineage(sub, ln["name"], ln["coarse_labels"], all_labels, markers, out, **common)
-            del sub
-    elif todo:
+    # Use the same bounded subprocess path for one or many lineages. Release
+    # the parent atlas before any child can wait for a model.
+    del ad
+    if todo:
         child_args = [
             "--h5ad",
             args.h5ad,
@@ -238,10 +237,11 @@ with pause_signals(), cache.lock_run(out):
             child_args += ["--effort", args.effort]
         results.update(
             run_lineages_parallel(
-                ad, todo, all_labels, out, child_args, coarse_col=args.coarse_col, fine_col=args.fine_col
+                args.h5ad, todo, all_labels, out, child_args, coarse_col=args.coarse_col, fine_col=args.fine_col
             )
         )
 
     safe_point()
-    merge_back(ad, plan, results, out, coarse_col=args.coarse_col, fine_col=args.fine_col, with_report=True)
+    with materialize(metadata(args.h5ad)) as full:
+        merge_back(full, plan, results, out, coarse_col=args.coarse_col, fine_col=args.fine_col, with_report=True)
     log.info(f"== report: {os.path.join(out, 'report.html')}")

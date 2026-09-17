@@ -430,7 +430,9 @@ def test_cli_resume_reruns_only_damaged_lineage_and_force_replans(tmp_path, monk
         calls["lineages"].append(name)
         data.obs["msp_ann_cluster"] = "0"
         data.obs["msp_ann_fine"] = "new " + name
-        data.write_h5ad(Path(outdir) / "annotated.h5ad")
+        from msp.agent_data import materialize
+        with materialize(data) as full:
+            full.write_h5ad(Path(outdir) / "annotated.h5ad")
         (Path(outdir) / "annotation_proposal.json").write_text(json.dumps({"lineage": name}))
         (Path(outdir) / "report.html").write_text("<html>complete</html>")
         pd.DataFrame(columns=["cell", "lineage", "cluster"]).to_csv(
@@ -440,6 +442,21 @@ def test_cli_resume_reruns_only_damaged_lineage_and_force_replans(tmp_path, monk
             Path(outdir) / "annotation_reassigned.csv", index=False
         )
 
+    # Test the CLI's resume selection separately from child process mechanics.
+    # The production sequential and parallel paths now share the child launcher.
+    def in_process_children(source_path, todo, all_labels, outdir, child_args, *, coarse_col, fine_col):
+        data = sc.read_h5ad(source_path)
+        results = {}
+        for entry in todo:
+            subset = lineage.subset_for(data, entry['coarse_labels'], coarse_col, fine_col)
+            results[entry['name']] = lineage.run_lineage(
+                subset, entry['name'], entry['coarse_labels'], all_labels, {}, outdir,
+                batch_col='sample', species=None, h5ad_path=str(source), resolutions=(.3, 1., 2.),
+                n_top_genes=2000, n_pcs=50, n_neighbors=15, harmony_kwargs={},
+                keys_for_foreign=['msp_leiden_r1.0', 'msp_leiden_r2.0'],
+                language='English', model='test', effort=None, max_turns=200)
+        return results
+    monkeypatch.setattr(lineage, 'run_lineages_parallel', in_process_children)
     monkeypatch.setenv("ZMIP_PARALLEL", "1")
     monkeypatch.setattr(plan_module, "_run", fake_agent)
     monkeypatch.setattr(plan_module, "lineage_evidence", lambda *a: (counts, None, None, None))
