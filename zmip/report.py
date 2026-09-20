@@ -78,7 +78,9 @@ def _section_plan(outdir, plan):
                     "coarse_labels": ", ".join(ln["coarse_labels"]),
                     "n_cells": ln["n_cells"],
                     "zoom": ln["zoom"],
-                    "reason": ln["reason"],
+                    # A host that writes the plan itself only states a reason where it has
+                    # one (a lineage it declined to zoom); the report must not need it.
+                    "reason": ln.get("reason", ""),
                 }
                 for ln in plan["lineages"]
             ],
