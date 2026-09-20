@@ -104,6 +104,14 @@ def _section_plan(outdir, plan):
     return "".join(parts)
 
 
+def _proposal(prop):
+    """A lineage's annotation proposal, written by either generation. The one-shot
+    annotate call wrote the cluster list at the top level; the v4 session contract
+    splits a session into submit_types and submit_quality, and stores what used to be
+    that list under "types" (same per-cluster fields), the quality verdicts beside it."""
+    return prop if "clusters" in prop else {**prop, **prop.get("types", {})}
+
+
 def _section_lineages(outdir, plan):
     zoomed = [ln for ln in plan["lineages"] if ln["zoom"]]
     if not zoomed:
@@ -122,7 +130,7 @@ def _section_lineages(outdir, plan):
             parts.append("<p>(not run yet)</p>")
             continue
         with open(prop_p) as f:
-            prop = json.load(f)
+            prop = _proposal(json.load(f))
         rm = _rows(os.path.join(d, "annotation_removed.csv"))
         ra = _rows(os.path.join(d, "annotation_reassigned.csv"))
         n_clusters = len(prop.get("clusters", []))
